@@ -8,19 +8,22 @@ class QTAccount:
 		账户信息的初始化定义
 		"""
 
-		self.total_asset = []  # 总资产
-		self.market_value = []  # 总市值
-		self.float_profit_loss = []  # 浮动盈亏
-		self.daily_profit_loss = []  # 当日盈亏
-		self.cash = []  # 可用现金
+		self.total_asset: float = 0  # 总资产
+		self.market_value: float = 0  # 总市值
+		self.float_profit_loss: float = 0  # 浮动盈亏
+		self.daily_profit_loss: float = 0  # 当日盈亏
+		self.cash: float = 0  # 可用现金
 
-	def long(self, price, volume):
+	def set_cash(self, cash):
+		self.cash = cash
+
+	def buy(self, price, volume):
 		"""
 		发起多单委托
 		"""
 		pass
 
-	def short(self, price, volume):
+	def sell(self, price, volume):
 		"""
 		发起空单委托
 		"""
@@ -28,7 +31,7 @@ class QTAccount:
 
 	def clear(self, volume):
 		"""
-		发起清仓委托
+		发起平仓委托
 		"""
 		pass
 

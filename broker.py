@@ -3,7 +3,14 @@
 class QTBroker:
 
 	def __init__(self):
-		pass
+		self.commission = 0
+		self.slippage = 0
+
+	def set_commission(self, commission):
+		self.commission = commission
+
+	def set_slippage(self, slippage):
+		self.slippage = slippage
 
 	def get_order(self, order):
 		"""

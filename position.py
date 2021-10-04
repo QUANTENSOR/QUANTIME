@@ -22,9 +22,13 @@ class QTPosition:
 											  'hold_days',  # 持股天数
 											  ]
 									 )
+		self.position_pool = []
 
 	def get_position(self):
 		return self.position
+
+	def next(self):
+		self.position_pool.append(self.position)
 
 
 if __name__ == '__main__':
