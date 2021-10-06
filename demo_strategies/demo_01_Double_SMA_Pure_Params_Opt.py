@@ -74,8 +74,8 @@ def My_Double_SMA_Opt(df, period_fast, period_slow):
 	df = df[['code', 'open', 'open_pct_change', 'trade']]
 	df.loc[df.index[0], 'position'] = 0
 	df.loc[df.index[0], 'market_value'] = 0
-	df.loc[df.index[0], 'total_asset'] = 100000
-	df.loc[df.index[0], 'cash'] = 100000
+	df.loc[df.index[0], 'total_asset'] = init_cash
+	df.loc[df.index[0], 'cash'] = init_cash
 
 	def max_pos(price, cash, commission, min_size):
 		cash_available = cash * (1 - commission)
@@ -196,8 +196,8 @@ if __name__ == '__main__':
 					 )
 
 	params = []
-	period_fast_array = np.arange(5, 31, 5)
-	period_slow_array = np.arange(10, 51, 5)
+	period_fast_array = np.arange(5, 201, 5)
+	period_slow_array = np.arange(10, 201, 5)
 	for i in period_fast_array:
 		for j in period_slow_array:
 			if i < j:

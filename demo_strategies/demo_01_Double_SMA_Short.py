@@ -13,8 +13,8 @@ pd.set_option('expand_frame_repr', False)
 pd.set_option('display.max_rows', 20000)
 
 
-period_fast = 60
-period_slow = 120
+period_fast = 30
+period_slow = 100
 
 
 df = pd.read_csv(filepath_or_buffer=r'../data_example/hs300etf_day.csv',
@@ -50,13 +50,18 @@ df['trade'] = df['signal'].shift(1).fillna(0)
 # 生成 [T+1日开盘] 的持仓这状态 无仓/多仓/空仓
 df['position_side'] = 999999999999999
 
+# 初始化设置
+init_cash = 100000
+init_commission = 2 / 1000
+init_min_size = 100
+init_slippage = 0.01
 
 # 删除无用列 添加 position market_value cash total_asset [P-M-C-T] 列
 df = df[['code', 'open', 'open_pct_change', 'trade']]
 df.loc[df.index[0], 'position'] = 0
 df.loc[df.index[0], 'market_value'] = 0
-df.loc[df.index[0], 'total_asset'] = 100000
-df.loc[df.index[0], 'cash'] = 100000
+df.loc[df.index[0], 'total_asset'] = init_cash
+df.loc[df.index[0], 'cash'] = init_cash
 
 
 def max_pos(price, cash, commission, min_size):
@@ -98,8 +103,8 @@ for i in range(1, len(df)):
 		if position[-2] == 0:  # first-start
 			buy_position = max_pos(price=open[-1],
 								   cash=cash[-2],
-								   commission=2 / 1000,
-								   min_size=100)  # P
+								   commission=init_commission,
+								   min_size=init_min_size)  # P
 			position[-1] = buy_position  # P
 			buy_value = buy_position * open[-1]  # Buy-Value !== Market-Value 考虑加仓情况
 			market_value[-1] = buy_value  # M
@@ -111,8 +116,8 @@ for i in range(1, len(df)):
 			cash[-1] = cash[-2] + market_value[-2]  # 平空 入现金 C
 			buy_position = max_pos(price=open[-1],
 								   cash=cash[-1],
-								   commission=2 / 1000,
-								   min_size=100)
+								   commission=init_commission,
+								   min_size=init_min_size)
 			position[-1] = buy_position  # P
 			buy_value = buy_position * open[-1]
 			market_value[-1] = buy_value
@@ -124,8 +129,8 @@ for i in range(1, len(df)):
 		if position[-2] == 0:  # first-start
 			sell_position = - max_pos(price=open[-1],
 									  cash=cash[-2],  # C
-									  commission=2 / 1000,
-									  min_size=100)  # --
+									  commission=init_commission,
+									  min_size=init_min_size)  # --
 			sell_value = abs(sell_position) * open[-1]  # ++
 			position[-1] = sell_position  # P --
 			market_value[-1] = sell_value  # M ++
@@ -137,8 +142,8 @@ for i in range(1, len(df)):
 			cash[-1] = cash[-2] + market_value[-2]  # 平多 入现金 C
 			sell_position = - max_pos(price=open[-1],
 									  cash=cash[-1],  # C
-									  commission=2 / 1000,
-									  min_size=100)  # --
+									  commission=init_commission,
+									  min_size=init_min_size)  # --
 			sell_value = abs(sell_position) * open[-1]  # --
 			position[-1] = sell_position  # P --
 			market_value[-1] = sell_value  # M ++
