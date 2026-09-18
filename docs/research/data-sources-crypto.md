@@ -1,7 +1,7 @@
 # 加密市场数据源全景：CEX 现货+合约 / DEX 现货+永续 / 链上
 
 - 调研日期：2026-09-18；探测节点：美国佛州（出口 IP 134.56.13.103），**未使用代理，未注册任何账号，未接触任何交易所账号**；探针只做公共 GET
-- 探针脚本：`docs/research/probes/cex_public_crypto.py`（31 项，27 通过）、`onchain_dex_crypto.py`（13 项，10 通过）；汇总 `probes/results.md`
+- 探针脚本：`docs/research/probes/cex_public_crypto.py`（29 项，25 通过）、`onchain_dex_crypto.py`（13 项，10 通过）；汇总 `probes/results.md`
 - 范围：仅市场数据。交易 API 能力（testnet/权限/美国资格）已在 [QNT-4](mention://issue/01a0adaa-9484-71a8-94c2-d1e564cae655) 覆盖，本文不重复。
 - 维度编号同 [data-sources-cn-equity.md](data-sources-cn-equity.md)；总索引见 [data-sources-index.md](data-sources-index.md)
 
@@ -178,7 +178,7 @@
 
 ## 7. 探针实测输出摘要（2026-09-18 03:5x UTC，美国节点）
 
-**表 A `cex_public_crypto.py`（31 项，27 通过）**
+**表 A `cex_public_crypto.py`（29 项，25 通过）**
 
 | source | market | check | ok | 耗时 s | 行数 | 起 | 止 | 备注 / 错误原文 |
 |---|---|---|---|---|---|---|---|---|
