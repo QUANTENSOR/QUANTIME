@@ -1,0 +1,17 @@
+# Secrets: only *.tpl (op:// references) is tracked; every real .env* stays ignored
+.env*
+!*.tpl
+op-secrets.env
+.credentials.json
+.claude.json
+
+# Local tool state
+.codegraph/
+*.bak
+*.local
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
