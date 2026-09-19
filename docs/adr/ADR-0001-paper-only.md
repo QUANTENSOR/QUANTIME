@@ -45,6 +45,8 @@ Alpaca paper key 与 live 分离、Paper Only 账户无需 live 账户（docs 20
 
 + 任何 agent 产物即使被完整泄露也无法触及实钱；− 第二阶段 paper 与真实成交质量有差距（需在报告中标注 paper 模型局限）；需新增：`BROKER_BASE_URL` 白名单测试、verify 审查清单加"凭据/URL 扫描"。
 
+> 编者说明：QNT-2 草案此处写 `verify-c`；迁入时改为跨家族角色名 `verify`（QNT-9 后 verify-c 已归档）。未改决策正文。
+
 ## Revisit trigger
 
 owner 决定进入实盘；Alpaca 变更 paper/live 隔离模型；出现 owner 认可的、带独立沙盒的 Robinhood API。

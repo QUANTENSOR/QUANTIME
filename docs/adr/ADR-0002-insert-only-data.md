@@ -41,6 +41,8 @@ ThetaData §8(e)（30 天 expunge，含衍生作品）；Massive §8（终止即
 
 + 任意历史结论可复现；− 存储放大（同键多版本）、查询要经视图；需新增：DB 权限迁移、`latest per source` 视图测试、`data_snapshot` 表、`ingestion_batch` 表。
 
+> 编者说明：QNT-2 草案 Consequences 仅列 `data_snapshot` 表；`ingestion_batch` 表为承接 QNT-4 D2.7 时在 Consequences 补入，Decision 正文 D2.7 仍为 QNT-4 原文。
+
 ## Revisit trigger
 
 单表超 50 GB 或 latest 视图 p95 > 5 s（考虑分区/TimescaleDB，沿用 euexia ADR-0001 的"直接跳 Timescale"结论）；新增第三个及以上重叠源。
