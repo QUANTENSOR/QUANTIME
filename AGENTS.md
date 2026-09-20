@@ -19,7 +19,7 @@ quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究�
 
 ## 4. 模型路由（长期版）
 
-全部模型调用经 Bifrost 网关：Anthropic 走 `/anthropic` 前缀，其余走 `/v1`；base URL 与 key 由 `op` 注入，不写进仓库。模型 id 统一写 `claude-fable-5-1` / `claude-opus-5` / `foundry/gpt-6-astra` / `xai/grok-4.6`。
+全部模型调用经 Bifrost 网关：Anthropic 走 `/anthropic` 前缀，其余走 `/v1`；base URL 与 key 由 `op` 注入，不写进仓库。模型 id 按 runtime 写法：Claude Code 用 `claude-fable-5-1` / `claude-opus-5`；Pi 用 `bifrost/xai/grok-4.6`；Codex 用 `foundry/gpt-6-astra`。`bifrost/` 前缀只对 pi 有效。
 
 | 角色 | 模型 / 运行时 | 职责与边界 |
 |---|---|---|
@@ -40,4 +40,4 @@ quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究�
 
 ## 6. Loaded on demand
 
-`.claude/rules/<topic>.md`（局部规则，带 `paths:`）与 `.claude/skills/<skill>/SKILL.md`（多步程序）目前均未建立；需要时随对应任务卡加入。Claude Code 自动加载；Codex / pi 在相关时读取。
+`.claude/rules/crypto-boundaries.md`（加密边界；`paths:` 指向 `packages/execution/**`、`packages/data/**`、`packages/backtest/**`、`packages/risk/**`）。Claude Code 自动加载；Codex / pi 编辑这些路径时读取。其余 `.claude/rules/<topic>.md` 与 `.claude/skills/<skill>/SKILL.md` 需要时随对应任务卡加入。
