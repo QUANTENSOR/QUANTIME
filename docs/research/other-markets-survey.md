@@ -11,9 +11,9 @@
 
 | 结论 | 依据 |
 |---|---|
-| **只有美股股票/ETF 同时满足"日线免费可得 + 许可可用 + 无需国内节点"；美股期权日线本次未找到合格免费源**——§2.5 逐源核过：Cboe 条款只授权"个人非商业单份拷贝"（不足以支撑落库），Alpaca/Massive/Nasdaq Data Link 需 key（不可用），EDGAR/FRED 不含期权日线。A股/国内期货/公募/港股的免费源要么许可不明确（爬虫类），要么明文禁止自动化（HKEX），要么需 token（Tushare） | §2.5；结论收窄见 §4 |
+| **五类市场中，本次均未证实存在"日线免费可得 + 权利人一手许可覆盖研究落库 + 无需凭据"的合格源——美股股票/ETF 也不例外**。不作任何市场"满足"的排他判断：美股股票/ETF 的候选要么需 key（Alpaca / Massive / Nasdaq Data Link / Tiingo），要么只有第三方转述而无权利人授权（Yahoo 经 yfinance），要么授权过窄（Cboe 单份个人拷贝）；唯一取到一手许可且无需凭据的 IEX HIST 是**单一交易所 pcap 逐笔**，不是合并市场日线。详见 §4 | §2.5、§4 |
 | **HKEX 官网是五类市场里唯一"明文禁止"的一档**：Terms of Use §5 禁止 robot/spider/scraper 访问、禁止存入联网服务器/数据库、禁止再分发与文本数据挖掘 | [HKEX Terms of Use](https://www.hkex.com.hk/Global/Exchange/Terms-of-Use?sc_lang=en) |
-| **上交所官网"允许研究使用（非商业）"；该授权只及于上交所本网站，不得推及深交所**：声明第三条"可基于非商业目的浏览、下载**本网站**的内容"，且"不得以向他人出售牟利为目的"使用。深交所单列为**不明确（条款按未验证处理）**，见 §2.1 与 §5 | [上交所法律声明](https://www.sse.com.cn/home/legal/) |
+| **上交所、深交所官网各自"允许研究使用（非商业浏览/下载，只及于本网站）"**：两份声明第三条措辞同构——"可基于非商业目的浏览、下载**本网站**的内容"，且"不得以向他人出售牟利为目的"使用。两份授权**各自只及于自己的网站，互不推及**，引用时必须分别举证 | [上交所法律声明](https://www.sse.com.cn/home/legal/)、[深交所法律声明](https://www.szse.cn/application/laws/index.html) |
 | **交易日历不能用"周一到周五减节假日"近似**：A股/港股有午休（11:30–13:00 / 12:00–13:00），国内期货有跨日夜盘（21:00 起，贵金属至次日 02:30），美股有 13:00 提前收盘日，且哪一天早收、哪一天全休**逐年摆动**（2026-07-03 全休、2028-07-03 早收）。三者都必须落成**显式会话表**而非规则推导 | §1 各节 + §3.1 |
 | **"复权"在五类市场是五种不同语义**：A股=除权除息因子；期货=换月价差拼接（非复权）；公募=分红再投资复权净值；港股=同A股；美股=split + 分红调整 + **OCC 期权合约调整**。ADR-0003 的复权因子表必须带 `adjust_kind` 区分，不能只存一个 factor 列 | §3.3 |
 | **期权合约乘数是"每合约标的数量"，不是"价格乘数"，且会被公司行为改写**：美股期权标准 100 股但 OCC 调整后 deliverable 可变；50ETF期权 10000 份；股指期权按点×100/200 元。品种元数据表必须把 `multiplier` 做成**带生效区间的版本化字段** | §3.2 |
@@ -99,7 +99,7 @@
 | 源 | 许可条款链接 | 三态 | 依据原文要点 |
 |---|---|---|---|
 | 上交所官网 | [法律声明](https://www.sse.com.cn/home/legal/) | **允许研究使用** | "可基于非商业目的浏览、下载本网站的内容"；"未经…书面许可，任何机构或者个人不得以向他人出售牟利为目的，使用本网站的任何内容" → 非商业研究可，商用/再分发禁止 |
-| 深交所官网 | [法律声明](https://www.szse.cn/application/laws/index.html) | **不明确（条款按未验证处理）** | 上交所声明只授权"本网站"，**不构成深交所的许可依据**，故不沿用其评级。本次在 `/application/laws/index.html` 取到疑似一手声明文本（裸路径 `/application/laws/` 连接被重置），但按 planner 2026-09-20 裁决**暂按未验证处理**，待 verify-b 独立复核后再定级；取回文本见 §5 |
+| 深交所官网 | [法律声明](https://www.szse.cn/application/laws/index.html) | **允许研究使用（非商业浏览/下载，只及于本网站）** | 第三条："任何机构或者个人可基于非商业目的浏览、下载本网站的内容。未经深圳证券交易所书面许可，任何机构或者个人不得以向他人出售牟利为目的，使用本网站的任何内容…"。**该授权只及于深交所本网站**，与上交所声明互不推及，各自独立举证。定级依据：impl-b 取证 + verify-b 独立复现（3×HTTP 200 / 10063 bytes），lead 2026-09-20 裁定升级；抓取记录见 §5.1 |
 | AKShare（库） | [MIT LICENSE](https://raw.githubusercontent.com/akfamily/akshare/main/LICENSE) | **允许研究使用（仅限库本身）** | 库为 MIT。但[项目概览](https://akshare.akfamily.xyz/introduction.html)声明"数据接口和相关数据仅供学术研究使用…商业风险自负" → **数据许可继承上游站点，不因 MIT 而变** |
 | Tushare Pro | [服务协议](https://tushare.pro/document/1?doc_id=405) | **不可用（quant-dev 无条目）** | 需 token。条款为"个人、不可转让、非商业使用…仅可用作个人查看使用"，禁止账号共享 |
 | BaoStock | [官网](http://baostock.com/) | **不明确** | 旧站称免费开源、无需注册 token；但官网本次抓取无实质内容，**条款原文未验证**。QNT-22 另记 2026-09 新版站点出现注册/实名/付费模块 |
@@ -121,7 +121,8 @@
 | 源 | 许可条款链接 | 三态 | 依据原文要点 |
 |---|---|---|---|
 | CSRC 规章原文 | [信息披露管理办法](http://www.csrc.gov.cn/csrc/c106256/c1653985/content.shtml) | **允许研究使用** | 政府公开规章，规则事实来源（非行情数据源） |
-| 上交所 ETF 列表/PCF | [上交所法律声明](https://www.sse.com.cn/home/legal/) | **允许研究使用（非商业）** | 同 §2.1 上交所行；授权仅及于上交所网站。**深交所 ETF/PCF 不在本表**——其条款按未验证处理（§2.1、§5），不得借上交所声明入表 |
+| 上交所 ETF 列表/PCF | [上交所法律声明](https://www.sse.com.cn/home/legal/) | **允许研究使用（非商业浏览/下载）** | 同 §2.1 上交所行；授权只及于上交所网站，不得据此覆盖深交所内容 |
+| 深交所 ETF 列表/PCF | [深交所法律声明](https://www.szse.cn/application/laws/index.html) | **允许研究使用（非商业浏览/下载）** | 深交所 ETF 列表/PCF 发布于 `www.szse.cn`，属声明所称"本网站的内容"，故适用其第三条授权（lead 2026-09-20 裁定）。**独立举证，不依赖上交所声明** |
 | 天天基金 `f10/lsjz` 等 | 无公开 API 条款 | **不明确** | 非公开接口、无授权声明。按 3A 裁决不列入可用清单 |
 | Tushare `fund_nav`/`fund_adj` | [服务协议](https://tushare.pro/document/1?doc_id=405) | **不可用（quant-dev 无条目）** | 需 token |
 
@@ -146,7 +147,9 @@
 | Alpaca 免费层 | [市场数据说明](https://docs.alpaca.markets/us/docs/about-market-data-api) | **不可用（quant-dev 无条目）** | 需 API key；免费层为 IEX 或 15 分钟延迟 SIP，期权为 indicative |
 | Massive（原 Polygon）免费层 | [pricing](https://massive.com/pricing) | **不可用（quant-dev 无条目）** | 需 API key；免费层 5 calls/min、2 年历史、仅 EOD |
 | Nasdaq Data Link 免费集 | [data.nasdaq.com](https://data.nasdaq.com/) | **不可用（quant-dev 无条目）** | 免费集需注册 key（匿名限 20 次/10 分钟） |
+| Tiingo 免费层 | [tiingo.com](https://www.tiingo.com/) | **不可用（quant-dev 无条目）** | 需注册 API key；**本卡未实测、未注册**，仅作为 §4 凭据路径候选列出 |
 | Stooq | 无可达条款页 | **不明确** | 条款页**未验证**；QNT-22 实测本节点被 JS PoW 拦截，批量 zip 需 Basic Auth |
+| IEX HIST（历史数据下载） | [IEX Historical Data Terms of Use](https://iextrading.com/iex-historical-data-terms/) | **允许研究使用（权利人一手条款，无需凭据）** | 本次实测无 key 可下载；条款明示 "Data provided for free by IEX"，再分发需署名。**但数据是 TOPS/DEEP 的 pcap 逐笔、且只含 IEX 一家成交，不是合并市场日线**——许可合格而形态不符，见 §4.1 |
 | exchange_calendars（日历库，非数据源） | [Apache-2.0](https://github.com/gerrymanoim/exchange_calendars) | **允许研究使用** | 50+ 交易所会话/午休/提前收盘；含 XNYS、XHKG、XSHG。**可作交易日历表的初始化来源与交叉校验** |
 
 ## 3. 对 ADR-0003（QNT-23）的多市场抽象接口建议
@@ -220,9 +223,26 @@ A股/港股的午休、国内期货的跨日夜盘、美股的 13:00 提前收�
 2. **交易日历不要依赖库的运行期推导**。`exchange_calendars`（Apache-2.0）可作初始化与交叉校验来源，但会话行必须落库并带 `source`，否则升级库版本会静默改变历史回测的会话边界——违反 ADR-0002 D2.4 可重放。
 3. **复权只存因子不存复权价**，取价在查询层（DuckDB 视图）合成。这与 ADR-0003 §2「DuckDB 只作查询/视图层」一致。
 
-## 4. 美股期权日线免费源：本次结论为"暂无合格源"
+## 4. 美股日线免费源逐源判定：股票/ETF 与期权均未证实合格
 
-§0 首行原写"美股/美股期权同时满足日线免费 + 许可可用"，经逐源复核**不成立**，现收窄。逐源判定（均以本次取到的一手条款为准）：
+本卡对"合格"的判据（三项全中才算）：**① 无需凭据**（不注册、不申请 key——ADR-0001 边界内本卡不可能验证凭据源）；**② 取到权利人一手许可原文**（第三方库的 README 不算，它无权代权利人授权）；**③ 该许可覆盖研究用途的存储/落库**（只允许"浏览"或"单份个人拷贝"的不算）。
+
+§0 上一版写"只有美股股票/ETF 满足"，按此判据复核**不成立**——股票/ETF 与期权都没有合格源，区别只在失败原因不同。逐源判定（均以本次取到的一手条款为准）：
+
+### 4.1 股票 / ETF 日线
+
+| 候选 | 无需凭据 | 权利人一手许可 | 覆盖研究落库 | 结论 |
+|---|---|---|---|---|
+| Yahoo Finance（经 yfinance） | 是 | **否** —— [Yahoo API 条款](https://legal.yahoo.com/us/en/yahoo/terms/product-atos/apiforydn/index.html) 针对的是其官方 API 产品，未授权非官方端点；[yfinance README](https://github.com/ranaroussi/yfinance) 自述 "not affiliated…with Yahoo"，其"personal use only"是**第三方声明，不能替代权利人授权** | 未证实 | **不合格**（§2.5 亦评"不明确"） |
+| IEX HIST（历史数据下载） | **是** —— 本次实测 `https://iextrading.com/api/1.0/hist` 返回 JSON 清单，逐日文件走 Google Storage 直链，Range 请求 HTTP 206，**全程无 key、无登录** | **是** —— [IEX Historical Data Terms of Use](https://iextrading.com/iex-historical-data-terms/) 为权利人 IEX 自身条款，明示 "Data provided for free by IEX"，再分发只要求署名 | 许可上可以，**但数据形态不符** | **不合格（形态不符，非许可问题）**：提供的是 TOPS/DEEP 的 **pcap 逐笔二进制**，且只含 IEX 一家交易所成交（条款自述 "does not reflect trading activity on markets other than IEX…a reference point only"），**不是合并市场日线** |
+| Stooq | 是（网页） | **否** —— 条款页 `https://stooq.com/terms/` 本次 HTTP 404，无可达条款 | 未证实 | **不合格** |
+| Tiingo / Alpaca / Massive / Nasdaq Data Link | **否**，均需注册 key | 不适用 | 不适用 | **不可用（quant-dev 无条目）** |
+| SEC EDGAR | 是 | 是 —— [Webmaster FAQ](https://www.sec.gov/os/webmaster-faq)，公共领域 | 是 | **不适用**：只有申报文件，**不含行情日线** |
+| FRED | 无 key 的 CSV 导出可 | 是 —— [Terms](https://fred.stlouisfed.org/legal/) | 部分（禁 scraping/mirroring） | **不适用**：宏观序列，**不含个股日线** |
+
+**小结：股票/ETF 日线本次同样未证实合格源。** 最接近的 IEX HIST 卡在数据形态（单所逐笔 pcap）而非许可，理论上可自行聚合为 IEX 单所日线，但那与"美股合并市场日线"不是一回事，本卡不据此宣称满足。
+
+### 4.2 期权日线
 
 | 候选 | 是否提供期权日线 | 许可判定 | 结论 |
 |---|---|---|---|
@@ -234,18 +254,24 @@ A股/港股的午休、国内期货的跨日夜盘、美股的 13:00 提前收�
 | FRED | **不提供**期权行情 | [Terms](https://fred.stlouisfed.org/legal/) | 不适用 |
 | OCC 网站（成交量/未平仓报告） | 有日频聚合量，**无逐合约 OHLC** | 本次访问返回 403（Cloudflare JS 挑战），**条款未取到** | **未验证**，且即使可达也非逐合约日线 |
 
-**结论：美股股票/ETF 满足"日线免费 + 许可可用"；美股期权日线在本次调研范围内暂无合格免费源。** 未为凑结论补任何来源——探过的 optionsDX（[terms 页](https://www.optionsdx.com/terms/) 实质内容仅退款条款）、DoltHub `post-no-preference/options`（文档页无许可声明）均因取不到明确许可原文而不列入上表作为合格项。
+**小结：期权日线无合格免费源。** 未为凑结论补任何来源——探过的 optionsDX（[terms 页](https://www.optionsdx.com/terms/) 实质内容仅退款条款）、DoltHub `post-no-preference/options`（文档页无许可声明）均因取不到明确许可原文而不列入上表作为合格项。
 
-这对 QNT-23 的直接影响：若后续要做美股期权日线，**要么走 quant-dev 立项凭据**（Alpaca/Massive 任一，届时按 ADR-0001 D1.5 经 `op` 注入），**要么书面向 Cboe 申请许可**。不应默认"免费可得"来排期。
+### 4.3 总结论
+
+**美股股票/ETF 与期权日线，本次均未证实存在合格免费源**（判据见 §4 开头三项）。这不等于"一定不存在"——只等于本卡在 ADR-0001 凭据边界内、不注册不申请 key 的前提下没能证实。
+
+这对 QNT-23 的直接影响：美股日线（股票/ETF 与期权都一样）**不应按"免费可得"排期**。可行路径有三条——**走 quant-dev 立项凭据**（股票/ETF 可选 Tiingo/Alpaca/Massive，期权可选 Alpaca/Massive，届时按 ADR-0001 D1.5 经 `op` 注入）；**向权利人书面申请许可**（Cboe 等）；或**接受 IEX HIST 的单所口径**并自行从 pcap 聚合（许可干净且无需凭据，代价是只有 IEX 一家的成交，不能当合并市场行情用）。
 
 ## 5. 本卡未验证项清单
 
-按"无来源不写"原则，以下项本卡查到二手转述但**未取到一手原文**，不应被下游当作既定事实：**深交所法律声明**（见下方待复核记录）；A股申报数量单位条文；上交所/深交所交易规则条文号与 tick 条文原文；A股 T+1 的监管原文；各期货交易所法律声明；商品期货日盘小节休息时段；夜盘时段的交易所一手公告；公募 T 日切分与 T+1 确认的监管原文；基金三种净值的监管定义；CTA/UTP 延迟的 plan 原文；NYSE/Nasdaq Trader 网站条款；中证指数使用条款；Stooq 条款；BaoStock 现行条款；OCC 网站条款（403 Cloudflare 挑战）。
+按"无来源不写"原则，以下项本卡查到二手转述但**未取到一手原文**，不应被下游当作既定事实：A股申报数量单位条文；上交所/深交所交易规则条文号与 tick 条文原文；A股 T+1 的监管原文；各期货交易所法律声明；商品期货日盘小节休息时段；夜盘时段的交易所一手公告；公募 T 日切分与 T+1 确认的监管原文；基金三种净值的监管定义；CTA/UTP 延迟的 plan 原文；NYSE/Nasdaq Trader 网站条款；中证指数使用条款；Stooq 条款；BaoStock 现行条款；OCC 网站条款（403 Cloudflare 挑战）。
 
-### 5.1 待 verify-b 独立复核：深交所法律声明
+### 5.1 已复核（保留作定级依据）：深交所法律声明
 
-本次抓取记录（供复核者原样重跑）：URL `https://www.szse.cn/application/laws/index.html`，2026-09-20 连续 3 次均 HTTP 200 / 10063 bytes；裸路径 `http://www.szse.cn/application/laws/` 连接被重置（`curl: (56) Recv failure`），是上一版误记"抓取无输出"的原因。取回文本第三条：
+状态：impl-b 取证 → verify-b 独立复现一致 → lead 2026-09-20 裁定，深交所定级为"允许研究使用（非商业浏览/下载，只及于本网站）"。本节保留抓取记录供后续复核，**不再是未验证项**。
+
+抓取记录（可原样重跑）：URL `https://www.szse.cn/application/laws/index.html`，2026-09-20 连续 3 次均 HTTP 200 / 10063 bytes；裸路径 `http://www.szse.cn/application/laws/` 连接被重置（`curl: (56) Recv failure`），是上一版误记"抓取无输出"的原因。取回文本第三条：
 
 > 在遵守中国有关法律与本声明的前提下，任何机构或者个人可基于非商业目的浏览、下载本网站的内容。未经深圳证券交易所书面许可，任何机构或者个人不得以向他人出售牟利为目的，使用本网站的任何内容，此种使用包括但不限于拷贝、下载、存贮、通过硬拷贝或电子抓取系统、发送、转换、出租、演示、转载、复制、修改、销售、传播、出版或任何其它形式的散发。
 
-**该文本未被本卡采信为定级依据**：按 planner 2026-09-20 裁决，深交所在 §2.1 保持"不明确（条款按未验证处理）"，深交所 ETF/PCF 不进 §2.3 可用表。记录在此只为让复核者能独立重跑同一 URL，不作为许可结论。
+verify-b 已独立重跑同一 URL 并确认 3×HTTP 200 / 10063 bytes、第三条引文一致。该文本**现为深交所定级的一手依据**（§0、§2.1、§2.3 三处一致）。注意其授权边界与上交所同构：只及于本网站、只限非商业浏览/下载，不覆盖商用或再分发。
