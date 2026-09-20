@@ -19,6 +19,7 @@
 | 0.4 | **`microsoft/qlib` 在我们的 Python 基线上装不上**：PyPI `pyqlib` 0.9.7 只有 cp38–cp312 wheel 且**无 sdist**，`commits_1y=27`、最后 release 2025-08-15 → 因子表达式引擎（`Ref/Mean/Std/Corr/Slope/Rsquare/Resi/WMA/EMA/Rank/Quantile` 等 Rolling 算子族）**只能当设计参考，不能当依赖** | §4.1 |
 | 0.5 | **GPL/AGPL/LGPL 类共 7 个**（freqtrade、frequi、backtesting.py、OpenBB、Zotero、paperless-ngx、nautilus_trader），其中 freqtrade 与 backtesting.py 的业务逻辑最值得读 → 全部标"只能参考思路不可复制代码"，单列 §7 | §7.1 |
 | 0.6 | **前端 Lightweight Charts 已是基线选型，本文只补两个正交项**：`KLineChart`（Apache-2.0，零依赖，内置指标与画线交互）补"技术指标 + 绘图工具"的交互语义；`perspective`（Apache-2.0）补"大表格虚拟滚动 + 透视"，**不是** K 线图替代 | §2 |
+| 0.6a | **Lightweight Charts 的许可条件不止 Apache-2.0**：上游 README 额外要求**在用户可见页面保留 `NOTICE` 署名文本 + 指向 <https://www.tradingview.com/> 的链接**（默认开启的 `attributionLogo` 选项可满足链接部分，关掉则须自行补上）。这是**采用前提、不是可选项**，QNT-27 落地时须列入验收项 | §2.1 |
 | 0.7 | **paper 交易模块的可参考对象少于其他模块**：真正能读的是 Hummingbot 的 `paper_trade` 撮合与 `budget_checker`、alpaca-py 的 paper/live URL 分流。**alpaca-py `TradingClient(paper=True)` 是默认值**，与 ADR-0001 D1.2 的白名单断言方向一致，可作为实现参照 | §6 |
 | 0.8 | **研报资料模块（QNT-32）的成熟件集中在"文档解析"而非"研报管理"**：docling（MIT）与 unstructured（Apache-2.0）可直接读其分块语义；Zotero（AGPL）只读其条目/附件数据模型思路 | §3 |
 
