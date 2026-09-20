@@ -11,10 +11,10 @@
 
 | 结论 | 依据 |
 |---|---|
-| **五类市场里只有美股/美股期权同时满足"日线免费可得 + 许可可用 + 无需国内节点"**；A股/国内期货/公募/港股的免费源要么许可不明确（爬虫类），要么明文禁止自动化（HKEX），要么需 token（Tushare）。这与 owner 2B 裁决方向一致 | §1–§2 各节 |
+| **只有美股股票/ETF 同时满足"日线免费可得 + 许可可用 + 无需国内节点"；美股期权日线本次未找到合格免费源**——§2.5 逐源核过：Cboe 条款只授权"个人非商业单份拷贝"（不足以支撑落库），Alpaca/Massive/Nasdaq Data Link 需 key（不可用），EDGAR/FRED 不含期权日线。A股/国内期货/公募/港股的免费源要么许可不明确（爬虫类），要么明文禁止自动化（HKEX），要么需 token（Tushare） | §2.5；结论收窄见 §4 |
 | **HKEX 官网是五类市场里唯一"明文禁止"的一档**：Terms of Use §5 禁止 robot/spider/scraper 访问、禁止存入联网服务器/数据库、禁止再分发与文本数据挖掘 | [HKEX Terms of Use](https://www.hkex.com.hk/Global/Exchange/Terms-of-Use?sc_lang=en) |
-| **沪深交易所官网是"允许研究使用"**：上交所法律声明明示"可基于非商业目的浏览、下载"，但"不得以向他人出售牟利为目的"使用 → 非商业研究可落库，商用/再分发禁止 | [上交所法律声明](https://www.sse.com.cn/home/legal/) |
-| **交易日历不能用"周一到周五减节假日"近似**：A股/港股有午休（11:30–13:00 / 12:00–13:00），国内期货有跨日夜盘（21:00 起，贵金属至次日 02:30），美股有 13:00 提前收盘日。三者都必须落成**显式会话表**而非规则推导 | §1 各节 + §3.1 |
+| **上交所、深交所官网各自"允许研究使用（非商业）"——两份声明必须分别引用，不可互相推及**：两所声明第三条措辞一致（"可基于非商业目的浏览、下载本网站的内容"，但"不得以向他人出售牟利为目的"使用），但各自**只授权"本网站"**，上交所声明不构成深交所数据的许可依据 | [上交所法律声明](https://www.sse.com.cn/home/legal/)、[深交所法律声明](https://www.szse.cn/application/laws/index.html) |
+| **交易日历不能用"周一到周五减节假日"近似**：A股/港股有午休（11:30–13:00 / 12:00–13:00），国内期货有跨日夜盘（21:00 起，贵金属至次日 02:30），美股有 13:00 提前收盘日，且哪一天早收、哪一天全休**逐年摆动**（2026-07-03 全休、2028-07-03 早收）。三者都必须落成**显式会话表**而非规则推导 | §1 各节 + §3.1 |
 | **"复权"在五类市场是五种不同语义**：A股=除权除息因子；期货=换月价差拼接（非复权）；公募=分红再投资复权净值；港股=同A股；美股=split + 分红调整 + **OCC 期权合约调整**。ADR-0003 的复权因子表必须带 `adjust_kind` 区分，不能只存一个 factor 列 | §3.3 |
 | **期权合约乘数是"每合约标的数量"，不是"价格乘数"，且会被公司行为改写**：美股期权标准 100 股但 OCC 调整后 deliverable 可变；50ETF期权 10000 份；股指期权按点×100/200 元。品种元数据表必须把 `multiplier` 做成**带生效区间的版本化字段** | §3.2 |
 
@@ -67,7 +67,7 @@
 | 交易时段 | 开市前时段 9:00–9:30；早市 9:30–12:00；**延续早市（午休）12:00–13:00**；午市 13:00–16:00；收市竞价 16:00 起至 **16:08–16:10 之间随机收市** | [HKEX 证券市场交易时间](https://www.hkex.com.hk/Services/Trading-hours-and-Severe-Weather-Arrangements/Trading-Hours/Securities-Market?sc_lang=en) |
 | 半日市 | 圣诞前夕/新年前夕/农历新年前夕：收市竞价 12:00 起至 12:08–12:10 随机收市，无延续早市与午市 | 同上 |
 | 港股通 | 北向交易时间对齐沪深，报单 9:10–15:00 | 同上 |
-| tick（价位表） | 按价格分档，HK$0.001 至 HK$5.00。**正在两阶段收窄**：第一阶段 2025-08-04（$10–20 档 0.02→0.01）；第二阶段 **2026-08-03**（$0.5–10 档 0.01→0.005，$20–50 档 0.05→0.02） | [HKEX 收窄最低上落价位](https://www.hkex.com.hk/Services/Trading/Securities/Overview/Trading-Mechanism/Reduction-of-Minimum-Spreads?sc_lang=en) |
+| tick（价位表） | 按价格分档，HK$0.001 至 HK$5.00。**两阶段收窄**（官网"Final implementation model"表）：**第一阶段 2025-08-04**——$10–20 档 $0.02→$0.01（−50%）、$20–50 档 $0.05→$0.02（−60%）；**第二阶段 2026-08-03**——**仅** $0.5–10 档 $0.01→$0.005（−50%）。适用范围两阶段相同："Equities, Real Estate Investment Trusts (REITs), equity warrants and other Applicable Securities"，**排除** ETP、债务证券、股票期权（ETO）与结构性产品 | [HKEX 收窄最低上落价位](https://www.hkex.com.hk/Services/Trading/Securities/Overview/Trading-Mechanism/Reduction-of-Minimum-Spreads?sc_lang=en) |
 | 每手股数 | 无统一标准，10 股至 100,000 股不等，按个别证券设定；**不支持碎股自动对盘** | [HKEX 交易机制](https://www.hkex.com.hk/Services/Trading/Securities/Overview/Trading-Mechanism?sc_lang=en) |
 | 涨跌停 | **无涨跌停板**；代之以市场波动调节机制（VCM）：适用恒生综合指数成分股及部分 ETF，触发区间 ±5%~±50%（参考 5 分钟前最后成交价），触发后 5 分钟冷静期内限价带交易。另有"不得偏离上次成交价 9 倍或以上"的报价限制 | 同上 |
 | 收盘价 | 非 CAS 证券取连续交易最后一分钟内 15 秒间隔 5 个按盘价快照的**中位数**（抗单笔成交操纵）；CAS 证券由收市竞价产生 | 同上 |
@@ -79,8 +79,9 @@
 | 维度 | 事实 | 来源 |
 |---|---|---|
 | 交易时段 | 核心 9:30–16:00 ET；9:30 Core Open Auction，15:50–16:00 收盘失衡期，16:00 收盘竞价。**无午休** | [NYSE hours & calendars](https://www.nyse.com/markets/hours-calendars) |
-| 提前收盘 | 13:00 收盘（期权 13:15）：2026-07-03、2026-11-27（感恩节次日）、2026-12-24 | 同上 |
-| 假日 | 元旦、MLK、总统日、Good Friday、阵亡将士、六月节、独立日、劳工节、感恩节、圣诞 | 同上 |
+| 提前收盘 | 13:00 收盘（合资格期权 13:15）：**2026 年仅两天**——2026-11-27（感恩节次日）、2026-12-24。官方表以脚注形式给出早收日，正文表格行一律是全日休市日 | 同上 |
+| 2026 全日休市 | 01-01 元旦、01-19 MLK、02-16 华盛顿诞辰、04-03 Good Friday、05-25 阵亡将士、06-19 六月节、**07-03（Independence Day observed，全日休市，非早收）**、09-07 劳工节、11-26 感恩节、12-25 圣诞 | 同上 |
+| 跨年对照（防同类错误） | 2027：07-05 Independence Day observed、12-24 Christmas Day observed 均为**全日休市**；早收仅 11-26。2028：07-04 休市而 **07-03 为 13:00 早收**（脚注 \*\*）、11-24 早收。即"独立日前后那一天"逐年在休市/早收之间摆动，**必须逐年查表，不可按规则推导** | 同上 |
 | tick（股票） | Reg NMS Rule 612：≥$1.00 的 NMS 股票原为 $0.01；2024-09 修订新增 **$0.005** 档，**2025-11-03 生效**，由上市交易所按三个月评估期的时间加权平均报价价差分配、每六个月重定 | [SEC 新闻稿 2024-137](https://www.sec.gov/newsroom/press-releases/2024-137)、[Davis Polk 解读](https://www.davispolk.com/insights/client-update/reg-nms-resized-sec-adjusts-tick-sizes-lowers-access-fees-and-accelerates) |
 | tick（期权） | 非 Penny 类：<$3 为 $0.05，其余 $0.10；Penny 类：<$3 为 $0.01，≥$3 为 $0.05 | [Cboe 股票期权规格](https://www.cboe.com/exchange_traded_stock/equity_options_spec) |
 | 个股熔断 | LULD：Tier 1（S&P500/Russell1000/部分ETF）>$3 为 ±5%，Tier 2 >$3 为 ±10%；开盘 15 分钟与收盘前 25 分钟**加倍**；越界 15 秒未回则暂停 5 分钟 | [Nasdaq LULD FAQ](https://nasdaqtrader.com/content/MarketRegulation/LULD_FAQ.pdf)、[LULD Plan](https://www.luldplan.com/) |
@@ -98,7 +99,7 @@
 | 源 | 许可条款链接 | 三态 | 依据原文要点 |
 |---|---|---|---|
 | 上交所官网 | [法律声明](https://www.sse.com.cn/home/legal/) | **允许研究使用** | "可基于非商业目的浏览、下载本网站的内容"；"未经…书面许可，任何机构或者个人不得以向他人出售牟利为目的，使用本网站的任何内容" → 非商业研究可，商用/再分发禁止 |
-| 深交所官网 | [法律声明](http://www.szse.cn/application/laws/) | **不明确** | 本次抓取无输出，**条款原文未验证**；QNT-22 记其与上交所一致，此处不替其背书 |
+| 深交所官网 | [法律声明](https://www.szse.cn/application/laws/index.html) | **允许研究使用（非商业）** | **本次已取到一手原文**（注意：裸路径 `/application/laws/` 连接被重置，可达 URL 为 `/application/laws/index.html`）。第三条："任何机构或者个人可基于非商业目的浏览、下载本网站的内容。未经深圳证券交易所书面许可，任何机构或者个人不得以向他人出售牟利为目的，使用本网站的任何内容，此种使用包括但不限于拷贝、下载、存贮、通过硬拷贝或电子抓取系统、发送…"。**该授权仅及于深交所本网站**，与上交所声明互不推及 |
 | AKShare（库） | [MIT LICENSE](https://raw.githubusercontent.com/akfamily/akshare/main/LICENSE) | **允许研究使用（仅限库本身）** | 库为 MIT。但[项目概览](https://akshare.akfamily.xyz/introduction.html)声明"数据接口和相关数据仅供学术研究使用…商业风险自负" → **数据许可继承上游站点，不因 MIT 而变** |
 | Tushare Pro | [服务协议](https://tushare.pro/document/1?doc_id=405) | **不可用（quant-dev 无条目）** | 需 token。条款为"个人、不可转让、非商业使用…仅可用作个人查看使用"，禁止账号共享 |
 | BaoStock | [官网](http://baostock.com/) | **不明确** | 旧站称免费开源、无需注册 token；但官网本次抓取无实质内容，**条款原文未验证**。QNT-22 另记 2026-09 新版站点出现注册/实名/付费模块 |
@@ -120,7 +121,8 @@
 | 源 | 许可条款链接 | 三态 | 依据原文要点 |
 |---|---|---|---|
 | CSRC 规章原文 | [信息披露管理办法](http://www.csrc.gov.cn/csrc/c106256/c1653985/content.shtml) | **允许研究使用** | 政府公开规章，规则事实来源（非行情数据源） |
-| 沪深交易所 ETF 列表/PCF | [上交所法律声明](https://www.sse.com.cn/home/legal/) | **允许研究使用（非商业）** | 同 §2.1 上交所条款 |
+| 上交所 ETF 列表/PCF | [上交所法律声明](https://www.sse.com.cn/home/legal/) | **允许研究使用（非商业）** | 同 §2.1 上交所行；授权仅及于上交所网站 |
+| 深交所 ETF 列表/PCF | [深交所法律声明](https://www.szse.cn/application/laws/index.html) | **允许研究使用（非商业）** | 同 §2.1 深交所行；**独立授权，不依赖上交所声明** |
 | 天天基金 `f10/lsjz` 等 | 无公开 API 条款 | **不明确** | 非公开接口、无授权声明。按 3A 裁决不列入可用清单 |
 | Tushare `fund_nav`/`fund_adj` | [服务协议](https://tushare.pro/document/1?doc_id=405) | **不可用（quant-dev 无条目）** | 需 token |
 
@@ -140,7 +142,7 @@
 | SEC EDGAR | [Webmaster FAQ / 访问条款](https://www.sec.gov/os/webmaster-faq) | **允许研究使用（公共领域）** | "All Government-created content on sec.gov and EDGAR public filing content are free to access and reuse"；要求声明 User-Agent 且 ≤10 请求/秒 |
 | FRED | [FRED Terms of Use](https://fred.stlouisfed.org/legal/) | **允许研究使用（个人/非商业，逐序列看版权）** | 免费供个人使用；**禁止** "data mining, mirroring, robots, scraping"，禁止整库再分发；API 需注册 key（→ 该路径为**不可用（quant-dev 无条目）**，但无 key 的 CSV 导出不需要）。各序列分公共领域/需署名/需事先许可三档 |
 | NYSE 日历页 | [hours-calendars](https://www.nyse.com/markets/hours-calendars) | **不明确** | 规则事实来源；网站条款原文**未验证**（本文用途为人工查阅规则） |
-| Cboe 规格页 / CDN | [股票期权规格](https://www.cboe.com/exchange_traded_stock/equity_options_spec) | **不明确** | 规格页公开；QNT-22 记 Cboe 页面有禁抓取声明（**原文未逐字复核**），延迟期权链不应作管线源 |
+| Cboe 网站（规格页 / 日频统计） | [Cboe Terms and Conditions](https://www.cboe.com/terms)（Last Updated 2022-11-16）；[规格页](https://www.cboe.com/exchange_traded_stock/equity_options_spec) | **不明确（授权过窄，不足以落库）** | **本次已取到一手条款原文**，§2："You may view, print and download **one copy** of the Materials for your **personal non-commercial use in connection with products and services offered by Cboe**" → 个人非商业单份拷贝，**未授权构建日线库或再分发**。更正本文上一版转述：Cboe 条款中**没有** robot/spider/scraper 条款，§3 的自动化相关禁止项只有"interfere with or disrupt the Website"与"collect or harvest any data about **other users**"，与抓取行情数据不是同一条 |
 | Nasdaq Trader 符号目录 | [nasdaqtrader.com](https://www.nasdaqtrader.com/) | **不明确** | 参考数据一般可内部使用；再分发条款**未验证**（QNT-22 同结论） |
 | Alpaca 免费层 | [市场数据说明](https://docs.alpaca.markets/us/docs/about-market-data-api) | **不可用（quant-dev 无条目）** | 需 API key；免费层为 IEX 或 15 分钟延迟 SIP，期权为 indicative |
 | Massive（原 Polygon）免费层 | [pricing](https://massive.com/pricing) | **不可用（quant-dev 无条目）** | 需 API key；免费层 5 calls/min、2 年历史、仅 EOD |
@@ -219,6 +221,24 @@ A股/港股的午休、国内期货的跨日夜盘、美股的 13:00 提前收�
 2. **交易日历不要依赖库的运行期推导**。`exchange_calendars`（Apache-2.0）可作初始化与交叉校验来源，但会话行必须落库并带 `source`，否则升级库版本会静默改变历史回测的会话边界——违反 ADR-0002 D2.4 可重放。
 3. **复权只存因子不存复权价**，取价在查询层（DuckDB 视图）合成。这与 ADR-0003 §2「DuckDB 只作查询/视图层」一致。
 
-## 4. 本卡未验证项清单
+## 4. 美股期权日线免费源：本次结论为"暂无合格源"
 
-按"无来源不写"原则，以下项本卡查到二手转述但**未取到一手原文**，不应被下游当作既定事实：深交所法律声明原文；A股申报数量单位条文；上交所/深交所交易规则条文号与 tick 条文原文；A股 T+1 的监管原文；各期货交易所法律声明；商品期货日盘小节休息时段；夜盘时段的交易所一手公告；公募 T 日切分与 T+1 确认的监管原文；基金三种净值的监管定义；CTA/UTP 延迟的 plan 原文；NYSE/Cboe/Nasdaq Trader 网站条款；中证指数使用条款；Stooq 条款；BaoStock 现行条款。
+§0 首行原写"美股/美股期权同时满足日线免费 + 许可可用"，经逐源复核**不成立**，现收窄。逐源判定（均以本次取到的一手条款为准）：
+
+| 候选 | 是否提供期权日线 | 许可判定 | 结论 |
+|---|---|---|---|
+| Cboe 网站（Daily Market Statistics / 规格页） | 有日频统计 | [Terms §2](https://www.cboe.com/terms) 仅授权"one copy…personal non-commercial use in connection with products and services offered by Cboe" | **不合格**：授权过窄，未涵盖构建日线库 |
+| Alpaca 期权数据 | 有 | [文档](https://docs.alpaca.markets/us/docs/about-market-data-api) 需 API key | **不可用（quant-dev 无条目）** |
+| Massive（原 Polygon） | 有 | [pricing](https://massive.com/pricing) 需 API key | **不可用（quant-dev 无条目）** |
+| Nasdaq Data Link 免费集 | 部分 | [data.nasdaq.com](https://data.nasdaq.com/) 需注册 key | **不可用（quant-dev 无条目）** |
+| SEC EDGAR | **不提供**期权行情 | [Webmaster FAQ](https://www.sec.gov/os/webmaster-faq) 公共领域 | 不适用 |
+| FRED | **不提供**期权行情 | [Terms](https://fred.stlouisfed.org/legal/) | 不适用 |
+| OCC 网站（成交量/未平仓报告） | 有日频聚合量，**无逐合约 OHLC** | 本次访问返回 403（Cloudflare JS 挑战），**条款未取到** | **未验证**，且即使可达也非逐合约日线 |
+
+**结论：美股股票/ETF 满足"日线免费 + 许可可用"；美股期权日线在本次调研范围内暂无合格免费源。** 未为凑结论补任何来源——探过的 optionsDX（[terms 页](https://www.optionsdx.com/terms/) 实质内容仅退款条款）、DoltHub `post-no-preference/options`（文档页无许可声明）均因取不到明确许可原文而不列入上表作为合格项。
+
+这对 QNT-23 的直接影响：若后续要做美股期权日线，**要么走 quant-dev 立项凭据**（Alpaca/Massive 任一，届时按 ADR-0001 D1.5 经 `op` 注入），**要么书面向 Cboe 申请许可**。不应默认"免费可得"来排期。
+
+## 5. 本卡未验证项清单
+
+按"无来源不写"原则，以下项本卡查到二手转述但**未取到一手原文**，不应被下游当作既定事实：A股申报数量单位条文；上交所/深交所交易规则条文号与 tick 条文原文；A股 T+1 的监管原文；各期货交易所法律声明；商品期货日盘小节休息时段；夜盘时段的交易所一手公告；公募 T 日切分与 T+1 确认的监管原文；基金三种净值的监管定义；CTA/UTP 延迟的 plan 原文；NYSE/Nasdaq Trader 网站条款；中证指数使用条款；Stooq 条款；BaoStock 现行条款；OCC 网站条款（403 Cloudflare 挑战）。
