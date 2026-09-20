@@ -35,7 +35,7 @@
 ### 1.2 USDT 本位永续（USDT-M perpetual）
 
 - 永续期货（perpetual futures / perpetual swap）无到期日，用定期资金费把合约价拉向现货；多头在资金费为正时付给空头，反之亦然。来源：He, Manela, Ross, von Wachter, *Fundamentals of Perpetual Futures*, <https://arxiv.org/abs/2212.06888>
-- 无摩擦市场可写无套利价格；有交易成本时是区间。实证上加密永续相对现货的偏离大于传统外汇远期，且跨币种共动、随时间缩小。来源：同上摘要（本卡读了 arXiv 摘要，**未下载 PDF 全文**）。
+- 无摩擦市场可写无套利价格；有交易成本时是区间。摘要原文：实证上，加密市场相对**这些价格**（前文无套利价格 / 有交易成本时的界）的偏离大于传统外汇市场（traditional currency markets），且跨币种共动、随时间缩小——比较对象不是「永续–现货基差 vs 外汇远期基差」。来源：同上摘要（本卡读了 arXiv 摘要，**未下载 PDF 全文**）。
 - 线性 / 反向 / quanto 永续的无套利表达与「使期货价与现货重合的资金费设定」见 Ackerer, Hugonnier, Jermann, *Perpetual Futures Pricing*, <https://arxiv.org/abs/2310.11771>
 - Binance USDT-M 公共行情 host 文档写作 `fapi.binance.com`，路径 `/fapi/v1/*` 与 `/futures/data/*`。来源：官方 Python SDK <https://github.com/binance/binance-connector-python/blob/master/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py> 。QNT-5 在美国节点对 `fapi.binance.com` 测得 451，**本卡不把该 host 当可摄取入口**；历史用 Vision zip（QNT-5 §1.1）。
 - 标记价 / 资金费快照：`GET /fapi/v1/premiumIndex`（有 symbol weight 1，无 symbol weight 10）。来源：同上 SDK。
@@ -207,9 +207,11 @@ QNT-5：本卡基线节点对 `api.binance.com` 现货 K 线 **451**。摄取应
 
 ### 4.3 USD-M 期货 REST（文档 host `fapi.binance.com`）
 
-权重与窗口摘自官方 SDK docstring（2026-09-20 拉取的 `master`）。QNT-5 美国节点对该 host **451**，下表是**接口契约**不是可达性保证。
+权重与窗口摘自官方 SDK docstring，commit `506e738ade8b53056db177a37189077de1004ff1`（与 verify-b 引用同一文件）。QNT-5 美国节点对该 host **451**，下表是**接口契约**不是可达性保证。
 
-K 线类 weight（`klines` / `continuousKlines` / `indexPriceKlines` / `markPriceKlines` / `premiumIndexKlines`）：
+SDK 文件：<https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py>
+
+K 线类 weight（`klines` L683–690 / `continuousKlines` L404–411 / `indexPriceKlines` L611 / `markPriceKlines` L859 / `premiumIndexKlines` L1147，五处同一张 LIMIT 表）：
 
 | LIMIT | weight |
 |---|---|
@@ -218,40 +220,41 @@ K 线类 weight（`klines` / `continuousKlines` / `indexPriceKlines` / `markPric
 | [500,1000] | 5 |
 | >1000 | 10 |
 
-| 方法 | 路径 | 限流 / 窗口 | 用途 |
-|---|---|---|---|
-| GET | `/fapi/v1/ping` | weight 1 | 连通 |
-| GET | `/fapi/v1/time` | weight 1 | 时间 |
-| GET | `/fapi/v1/exchangeInfo` | weight 1 | 合约规则 |
-| GET | `/fapi/v1/depth` | 5/10/20/50→2；100→5；500→10；1000→20 | 盘口 |
-| GET | `/fapi/v1/trades` | weight 5 | 最近成交 |
-| GET | `/fapi/v1/historicalTrades` | weight 20 | 旧成交（是否无 key **未在本卡验证**） |
-| GET | `/fapi/v1/aggTrades` | weight 20；仅约 48h | 聚合成交 |
-| GET | `/fapi/v1/klines` | 见上表 | 成交价 K 线 |
-| GET | `/fapi/v1/continuousKlines` | 见上表 | 连续合约 K 线 |
-| GET | `/fapi/v1/indexPriceKlines` | 见上表 | 指数 K |
-| GET | `/fapi/v1/markPriceKlines` | 见上表 | 标记价 K |
-| GET | `/fapi/v1/premiumIndexKlines` | 见上表 | 溢价指数 K |
-| GET | `/fapi/v1/premiumIndex` | 1 / 10 | 标记价 + 资金费快照 |
-| GET | `/fapi/v1/ticker/24hr` | 单 symbol 1 | 24h |
-| GET | `/fapi/v1/ticker/price` 与 `/fapi/v2/ticker/price` | 单 symbol 1 | 最新价 |
-| GET | `/fapi/v1/ticker/bookTicker` | 单 symbol 2 | 最优买卖 |
-| GET | `/fapi/v1/openInterest` | weight 1 | 当前 OI |
-| GET | `/fapi/v1/fundingRate` | 与 fundingInfo 共享 **500/5min/IP** | 资金费历史 |
-| GET | `/fapi/v1/fundingInfo` | 计入上面共享额度 | cap/floor/间隔 |
-| GET | `/fapi/v1/symbolAdlRisk` | weight 1 | ADL 评级快照 |
-| GET | `/fapi/v1/indexInfo` | weight 1 | 指数成分说明 |
-| GET | `/fapi/v1/constituents` | weight 2 | 指数成分 |
-| GET | `/fapi/v1/insuranceBalance` | weight 1 | 保险基金快照 |
-| GET | `/fapi/v1/assetIndex` | 1 或 10 | 多资产指数；SDK 注 CM-UM Integration 2026-06-30 |
-| GET | `/fapi/v1/tradingSchedule` | weight 5 | 交易日历 |
-| GET | `/futures/data/openInterestHist` | Weight 0；**1 个月**；1000 req/5min | OI 统计 |
-| GET | `/futures/data/topLongShortAccountRatio` | 见 SDK | 顶级账户多空 |
-| GET | `/futures/data/topLongShortPositionRatio` | Weight 0 | 顶级持仓多空 |
-| GET | `/futures/data/globalLongShortAccountRatio` | Weight 0；**30 天**；1000/5min | 全局多空 |
-| GET | `/futures/data/takerlongshortRatio` | Weight 0；**30 天** | Taker 买卖 |
-| GET | `/futures/data/basis` | Weight 0；**30 天** | 基差 |
-| GET | `/futures/data/delivery-price` | Weight 0 | 交割结算价 |
+| 方法 | 路径 | 限流 / 窗口（SDK 原文） | 用途 | SDK 锚点 |
+|---|---|---|---|---|
+| GET | `/fapi/v1/ping` | Weight(IP): 1 | 连通 | [L1637](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1637) |
+| GET | `/fapi/v1/time` | Weight(IP): 1 | 时间 | [L249](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L249) |
+| GET | `/fapi/v1/exchangeInfo` | Weight(IP): 1 | 合约规则 | [L477](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L477) |
+| GET | `/fapi/v1/depth` | Limit 5/10/20/50→2；100→5；500→10；1000→20 | 盘口 | [L1092](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1092) |
+| GET | `/fapi/v1/trades` | Weight(IP): 5 | 最近成交 | [L1342](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1342) |
+| GET | `/fapi/v1/historicalTrades` | **Weight(IP): 200** | 旧成交（是否无 key **未在本卡验证**） | [L928](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L928) |
+| GET | `/fapi/v1/aggTrades` | Weight(IP): 20；仅约 48h | 聚合成交 | [L336](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L336) |
+| GET | `/fapi/v1/klines` | 见上 LIMIT 表 | 成交价 K 线 | [L683](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L683) |
+| GET | `/fapi/v1/continuousKlines` | 见上 LIMIT 表 | 连续合约 K 线 | [L404](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L404) |
+| GET | `/fapi/v1/indexPriceKlines` | 见上 LIMIT 表 | 指数 K | [L611](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L611) |
+| GET | `/fapi/v1/markPriceKlines` | 见上 LIMIT 表 | 标记价 K | [L859](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L859) |
+| GET | `/fapi/v1/premiumIndexKlines` | 见上 LIMIT 表 | 溢价指数 K | [L1147](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1147) |
+| GET | `/fapi/v1/premiumIndex` | **1** with symbol, **10** without | 标记价 + 资金费快照 | [L816](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L816) |
+| GET | `/fapi/v1/ticker/24hr` | 单 symbol **1**；省略 symbol **40** | 24h | [L1674](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1674) |
+| GET | `/fapi/v1/ticker/price` | 单 symbol 1；省略 2 | 最新价 | [L1487](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1487) |
+| GET | `/fapi/v2/ticker/price` | 单 symbol 1；省略 2 | 最新价 v2 | [L1529](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1529) |
+| GET | `/fapi/v1/ticker/bookTicker` | 单 symbol **2**；省略 **5** | 最优买卖 | [L1444](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1444) |
+| GET | `/fapi/v1/openInterest` | Weight(IP): 1 | 当前 OI | [L979](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L979) |
+| GET | `/fapi/v1/fundingRate` | 与 fundingInfo 共享 **500/5min/IP**（未写 REQUEST_WEIGHT 数字） | 资金费历史 | [L517](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L517) |
+| GET | `/fapi/v1/fundingInfo` | Weight **0**；计入上面共享额度 | cap/floor/间隔 | [L567](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L567) |
+| GET | `/fapi/v1/symbolAdlRisk` | Weight(IP): 1 | ADL 评级快照 | [L99](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L99) |
+| GET | `/fapi/v1/indexInfo` | Weight(IP): 1 | 指数成分说明 | [L286](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L286) |
+| GET | `/fapi/v1/constituents` | Weight(IP): 2 | 指数成分 | [L1260](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1260) |
+| GET | `/fapi/v1/insuranceBalance` | Weight(IP): 1 | 保险基金快照 | [L1303](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1303) |
+| GET | `/fapi/v1/assetIndex` | 单 symbol **1**；省略 **10** | 多资产指数；SDK 注 CM-UM Integration 2026-06-30 | [L139](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L139) |
+| GET | `/fapi/v1/tradingSchedule` | Weight(IP): 5 | 交易日历 | [L1875](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1875) |
+| GET | `/futures/data/openInterestHist` | Weight(IP): 0；**latest 1 month**；IP 1000/5min | OI 统计 | [L1026](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1026) |
+| GET | `/futures/data/topLongShortAccountRatio` | docstring **未写 Weight(IP)**；**30 天**；IP 1000/5min | 顶级账户多空 | [L1734](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1734) |
+| GET | `/futures/data/topLongShortPositionRatio` | Weight(IP): 0；**30 天**；IP 1000/5min | 顶级持仓多空 | [L1805](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1805) |
+| GET | `/futures/data/globalLongShortAccountRatio` | Weight(IP): 0；**30 天**；IP 1000/5min | 全局多空 | [L754](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L754) |
+| GET | `/futures/data/takerlongshortRatio` | Weight(IP): 0；**30 天**；IP 1000/5min | Taker 买卖 | [L1576](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1576) |
+| GET | `/futures/data/basis` | Weight(IP): 0；**30 天** | 基差 | [L182](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L182) |
+| GET | `/futures/data/delivery-price` | Weight(IP): 0 | 交割结算价 | [L1214](https://github.com/binance/binance-connector-python/blob/506e738ade8b53056db177a37189077de1004ff1/clients/derivatives_trading_usds_futures/src/binance_sdk_derivatives_trading_usds_futures/rest_api/api/market_data_api.py#L1214) |
 
 USD-M K 线 interval 枚举以 SDK `KlineCandlestickDataIntervalEnum` 为准（本卡未把枚举文件全文展开；与现货相比期货 REST **通常无 1s**——**未在本卡打开枚举文件核实，标未验证**）。
 
@@ -265,7 +268,7 @@ USD-M K 线 interval 枚举以 SDK `KlineCandlestickDataIntervalEnum` 为准（�
 说明与字段：<https://github.com/binance/binance-public-data/blob/master/README.md>  
 许可：该仓库 LICENSE **MIT**（代码/文档仓库许可；**行情数据再分发仍受 Binance ToU 约束，ToU 条号本卡未验证**，同 QNT-5）。
 
-发布节奏：日文件次日；月文件每月第一个周一。全部 symbol。每 zip 旁有 `.CHECKSUM`（sha256）。归档日后可能被替换，README 列出 2022-04-21、2022-08-08 两次 updates。
+发布节奏：日文件次日；月文件每月第一个周一。全部 symbol。每 zip 旁有 `.CHECKSUM`（sha256）。**上游归档可被替换**：README Updates 记录替换日期、changelog zip、以及被替换文件与替换文件的 checksum（已列 2022-04-21、2022-08-08）。Checksum 只校验某一版内容，**不保证同一 URL 永久不变**。来源：<https://github.com/binance/binance-public-data/blob/5c7f3197591c0d54d85dc43066226bc4c671d47a/README.md#updates>
 
 README **明文**的类别：
 
@@ -289,9 +292,9 @@ Vision **无声明 REST 式 IP weight**。QNT-5 探针下载月 zip 成功（本
 
 ### 4.6 对 ADR-0002 的含义（不实施，只记账）
 
-- Vision zip + CHECKSUM：天然不可变文件，适合 `ingestion_batch.content_sha256`。
+- Vision 上游 zip **不是**不可变快照：同 URL 可被官方替换（README Updates）。重放必须依赖**自行保留的本地副本**，并在 `ingestion_batch` 记录**下载当时**的 checksum / `content_sha256`；不能把上游 URL 当固定快照。QNT-5 仍有「zip 天然不可变」旧表述，只报不改上游。
 - REST 最后一根未收盘 K 线不应作为最终事实行；WS `k.x=false` 同理。
-- `openInterestHist` / `basis` 等短窗口接口只能作增量，回放底座仍是 zip（QNT-5 方案 A）。
+- `openInterestHist` / `basis` 等短窗口接口只能作增量，回放底座仍是**本地留存的** zip（QNT-5 方案 A），不是实时去拉 Vision URL。
 - `developers.binance.com` 与 GitHub 文档并存；本卡以 GitHub 为准，因为 SPA 本节点 202 空体。
 
 ## 5. 未验证 / 文档矛盾（只报不修）
