@@ -1,13 +1,17 @@
 {
-  "probed_at": "2026-09-20T04:28:49Z",
-  "since": "2025-09-20T04:26:42Z",
+  "probed_at": "2026-09-20T05:58:39Z",
+  "since": "2025-09-20T05:57:55Z",
+  "auth_mode": "token(GITHUB_TOKEN)",
+  "commits_1y_method": "GET /repos/{repo}/commits?since=<now-365d>&per_page=100; exact count via the Link rel=last page number plus the final page length ((last-1)*100 + len(last)); default branch, merge commits included",
+  "failures": [],
   "repos": [
     {
       "repo": "tradingview/lightweight-charts",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T11:41:07Z",
-      "stars": 17309,
+      "stars": 17310,
       "archived": false,
       "commits_1y": 328,
       "latest_release": "v5.2.1",
@@ -15,6 +19,7 @@
     },
     {
       "repo": "klinecharts/KLineChart",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T17:08:04Z",
@@ -26,6 +31,7 @@
     },
     {
       "repo": "perspective-dev/perspective",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T13:35:02Z",
@@ -37,6 +43,7 @@
     },
     {
       "repo": "freqtrade/frequi",
+      "status": "ok",
       "spdx": "GPL-3.0",
       "license_name": "GNU General Public License v3.0",
       "pushed_at": "2026-09-17T04:36:35Z",
@@ -48,10 +55,11 @@
     },
     {
       "repo": "OpenBB-finance/OpenBB",
+      "status": "ok",
       "spdx": "NOASSERTION",
       "license_name": "Other",
       "pushed_at": "2026-09-19T21:44:06Z",
-      "stars": 73271,
+      "stars": 73272,
       "archived": false,
       "commits_1y": 138,
       "latest_release": "ODP",
@@ -59,6 +67,7 @@
     },
     {
       "repo": "ranaroussi/yfinance",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-17T11:23:15Z",
@@ -70,6 +79,7 @@
     },
     {
       "repo": "databento/databento-python",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-17T15:39:55Z",
@@ -81,6 +91,7 @@
     },
     {
       "repo": "gerrymanoim/exchange_calendars",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-15T09:27:58Z",
@@ -92,6 +103,7 @@
     },
     {
       "repo": "dlt-hub/dlt",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T12:50:38Z",
@@ -103,10 +115,11 @@
     },
     {
       "repo": "ccxt/ccxt",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-19T15:42:12Z",
-      "stars": 44050,
+      "stars": 44052,
       "archived": false,
       "commits_1y": 9947,
       "latest_release": "v4.5.81",
@@ -114,10 +127,11 @@
     },
     {
       "repo": "docling-project/docling",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-18T13:47:32Z",
-      "stars": 67170,
+      "stars": 67211,
       "archived": false,
       "commits_1y": 790,
       "latest_release": "v2.129.0",
@@ -125,6 +139,7 @@
     },
     {
       "repo": "Unstructured-IO/unstructured",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-19T20:32:46Z",
@@ -136,21 +151,23 @@
     },
     {
       "repo": "opendatalab/MinerU",
+      "status": "ok",
       "spdx": "NOASSERTION",
       "license_name": "Other",
       "pushed_at": "2026-09-19T18:02:14Z",
-      "stars": 80270,
+      "stars": 80272,
       "archived": false,
-      "commits_1y": 2887,
+      "commits_1y": 2882,
       "latest_release": "mineru-4.0.4-released",
       "released_at": "2026-09-19T18:01:35Z"
     },
     {
       "repo": "chroma-core/chroma",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T23:12:37Z",
-      "stars": 29333,
+      "stars": 29334,
       "archived": false,
       "commits_1y": 1237,
       "latest_release": "1.5.9",
@@ -158,10 +175,11 @@
     },
     {
       "repo": "zotero/zotero",
+      "status": "ok",
       "spdx": "NOASSERTION",
       "license_name": "Other",
       "pushed_at": "2026-09-17T20:08:53Z",
-      "stars": 15327,
+      "stars": 15328,
       "archived": false,
       "commits_1y": 992,
       "latest_release": null,
@@ -169,10 +187,11 @@
     },
     {
       "repo": "paperless-ngx/paperless-ngx",
+      "status": "ok",
       "spdx": "GPL-3.0",
       "license_name": "GNU General Public License v3.0",
       "pushed_at": "2026-09-20T04:12:47Z",
-      "stars": 45323,
+      "stars": 45325,
       "archived": false,
       "commits_1y": 1673,
       "latest_release": "v3.2.0",
@@ -180,6 +199,7 @@
     },
     {
       "repo": "microsoft/qlib",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-17T16:40:12Z",
@@ -191,6 +211,7 @@
     },
     {
       "repo": "stefan-jansen/alphalens-reloaded",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2025-12-15T04:03:16Z",
@@ -202,6 +223,7 @@
     },
     {
       "repo": "TA-Lib/ta-lib-python",
+      "status": "ok",
       "spdx": "BSD-2-Clause",
       "license_name": "BSD 2-Clause \"Simplified\" License",
       "pushed_at": "2026-09-15T18:45:16Z",
@@ -213,6 +235,7 @@
     },
     {
       "repo": "xgboosted/pandas-ta-classic",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-16T14:39:22Z",
@@ -224,6 +247,7 @@
     },
     {
       "repo": "bukosabino/ta",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-03-18T13:04:55Z",
@@ -235,10 +259,11 @@
     },
     {
       "repo": "polakowo/vectorbt",
+      "status": "ok",
       "spdx": "NOASSERTION",
       "license_name": "Other",
       "pushed_at": "2026-09-17T20:38:03Z",
-      "stars": 9132,
+      "stars": 9133,
       "archived": false,
       "commits_1y": 149,
       "latest_release": "v1.1.0",
@@ -246,6 +271,7 @@
     },
     {
       "repo": "stefan-jansen/zipline-reloaded",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-01-06T13:01:54Z",
@@ -257,10 +283,11 @@
     },
     {
       "repo": "QuantConnect/Lean",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T22:51:33Z",
-      "stars": 21686,
+      "stars": 21687,
       "archived": false,
       "commits_1y": 429,
       "latest_release": "v2.4.0.1",
@@ -268,17 +295,19 @@
     },
     {
       "repo": "nautechsystems/nautilus_trader",
+      "status": "ok",
       "spdx": "LGPL-3.0",
       "license_name": "GNU Lesser General Public License v3.0",
-      "pushed_at": "2026-09-20T04:27:03Z",
-      "stars": 29149,
+      "pushed_at": "2026-09-20T05:29:54Z",
+      "stars": 29154,
       "archived": false,
-      "commits_1y": 5459,
+      "commits_1y": 5465,
       "latest_release": "v1.231.0",
       "released_at": "2026-08-02T18:53:49Z"
     },
     {
       "repo": "kernc/backtesting.py",
+      "status": "ok",
       "spdx": "AGPL-3.0",
       "license_name": "GNU Affero General Public License v3.0",
       "pushed_at": "2026-08-05T12:39:16Z",
@@ -290,6 +319,7 @@
     },
     {
       "repo": "pmorissette/bt",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-18T15:19:49Z",
@@ -301,6 +331,7 @@
     },
     {
       "repo": "PyPortfolio/PyPortfolioOpt",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-07-07T21:18:14Z",
@@ -312,6 +343,7 @@
     },
     {
       "repo": "dcajasn/Riskfolio-Lib",
+      "status": "ok",
       "spdx": "BSD-3-Clause",
       "license_name": "BSD 3-Clause \"New\" or \"Revised\" License",
       "pushed_at": "2026-08-18T17:08:34Z",
@@ -323,6 +355,7 @@
     },
     {
       "repo": "skfolio/skfolio",
+      "status": "ok",
       "spdx": "BSD-3-Clause",
       "license_name": "BSD 3-Clause \"New\" or \"Revised\" License",
       "pushed_at": "2026-09-19T14:45:39Z",
@@ -334,6 +367,7 @@
     },
     {
       "repo": "ranaroussi/quantstats",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-07-20T14:12:56Z",
@@ -345,6 +379,7 @@
     },
     {
       "repo": "alpacahq/alpaca-py",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T11:13:19Z",
@@ -356,10 +391,11 @@
     },
     {
       "repo": "hummingbot/hummingbot",
+      "status": "ok",
       "spdx": "Apache-2.0",
       "license_name": "Apache License 2.0",
       "pushed_at": "2026-09-18T07:28:50Z",
-      "stars": 20076,
+      "stars": 20079,
       "archived": false,
       "commits_1y": 1703,
       "latest_release": "v2.16.0",
@@ -367,10 +403,11 @@
     },
     {
       "repo": "freqtrade/freqtrade",
+      "status": "ok",
       "spdx": "GPL-3.0",
       "license_name": "GNU General Public License v3.0",
       "pushed_at": "2026-09-19T11:07:05Z",
-      "stars": 54556,
+      "stars": 54559,
       "archived": false,
       "commits_1y": 3273,
       "latest_release": "2026.8",
@@ -378,10 +415,11 @@
     },
     {
       "repo": "jesse-ai/jesse",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-17T16:19:01Z",
-      "stars": 8539,
+      "stars": 8541,
       "archived": false,
       "commits_1y": 445,
       "latest_release": null,
@@ -389,6 +427,7 @@
     },
     {
       "repo": "ib-api-reloaded/ib_async",
+      "status": "ok",
       "spdx": "BSD-2-Clause",
       "license_name": "BSD 2-Clause \"Simplified\" License",
       "pushed_at": "2026-08-19T03:04:44Z",
@@ -400,14 +439,355 @@
     },
     {
       "repo": "stefan-jansen/machine-learning-for-trading",
+      "status": "ok",
       "spdx": "MIT",
       "license_name": "MIT License",
       "pushed_at": "2026-09-20T00:49:36Z",
-      "stars": 20939,
+      "stars": 20942,
       "archived": false,
       "commits_1y": 743,
       "latest_release": "v3.0.0-artifacts",
       "released_at": "2026-07-24T08:08:45Z"
     }
-  ]
+  ],
+  "pypi": {
+    "PyPortfolio/PyPortfolioOpt": {
+      "package": "pyportfolioopt",
+      "version": "1.6.0",
+      "requires_python": null,
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "TA-Lib/ta-lib-python": {
+      "package": "ta-lib",
+      "version": "0.8.0",
+      "requires_python": ">=3.9",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14",
+        "3.9"
+      ],
+      "wheel_tags": [
+        "cp310",
+        "cp311",
+        "cp312",
+        "cp313",
+        "cp314",
+        "cp39"
+      ],
+      "has_sdist": true
+    },
+    "alpacahq/alpaca-py": {
+      "package": "alpaca-py",
+      "version": "0.44.0",
+      "requires_python": "<4.0.0,>=3.10.0",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "bukosabino/ta": {
+      "package": "ta",
+      "version": "0.11.0",
+      "requires_python": null,
+      "python_classifiers": [
+        "3.6",
+        "3.7"
+      ],
+      "wheel_tags": [],
+      "has_sdist": true
+    },
+    "ccxt/ccxt": {
+      "package": "ccxt",
+      "version": "4.5.81",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "databento/databento-python": {
+      "package": "databento",
+      "version": "0.86.0",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "dcajasn/Riskfolio-Lib": {
+      "package": "Riskfolio-Lib",
+      "version": "7.3.0",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "cp310",
+        "cp311",
+        "cp312",
+        "cp313",
+        "cp314"
+      ],
+      "has_sdist": true
+    },
+    "dlt-hub/dlt": {
+      "package": "dlt",
+      "version": "1.30.0",
+      "requires_python": "<3.15,>=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "gerrymanoim/exchange_calendars": {
+      "package": "exchange-calendars",
+      "version": "4.13.2",
+      "requires_python": "<4,>=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "jesse-ai/jesse": {
+      "package": "jesse",
+      "version": "3.2.0",
+      "requires_python": ">=3.10",
+      "python_classifiers": [],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "kernc/backtesting.py": {
+      "package": "backtesting",
+      "version": "0.6.6",
+      "requires_python": ">=3.9",
+      "python_classifiers": [],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "microsoft/qlib": {
+      "package": "pyqlib",
+      "version": "0.9.7",
+      "requires_python": ">=3.8.0",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.8",
+        "3.9"
+      ],
+      "wheel_tags": [
+        "cp310",
+        "cp311",
+        "cp312",
+        "cp38",
+        "cp39"
+      ],
+      "has_sdist": false
+    },
+    "nautechsystems/nautilus_trader": {
+      "package": "nautilus_trader",
+      "version": "1.231.0",
+      "requires_python": "<3.15,>=3.12",
+      "python_classifiers": [
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "cp312",
+        "cp313",
+        "cp314"
+      ],
+      "has_sdist": true
+    },
+    "pmorissette/bt": {
+      "package": "bt",
+      "version": "1.2.3",
+      "requires_python": ">=3.9",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.9"
+      ],
+      "wheel_tags": [
+        "cp311",
+        "cp312",
+        "cp313",
+        "cp314"
+      ],
+      "has_sdist": true
+    },
+    "polakowo/vectorbt": {
+      "package": "vectorbt",
+      "version": "1.1.0",
+      "requires_python": "<3.15,>=3.11",
+      "python_classifiers": [
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "ranaroussi/quantstats": {
+      "package": "quantstats",
+      "version": "0.0.81",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "ranaroussi/yfinance": {
+      "package": "yfinance",
+      "version": "1.7.0",
+      "requires_python": null,
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.6",
+        "3.7",
+        "3.8",
+        "3.9"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "skfolio/skfolio": {
+      "package": "skfolio",
+      "version": "1.2.9",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "stefan-jansen/alphalens-reloaded": {
+      "package": "alphalens-reloaded",
+      "version": "0.4.6",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": true
+    },
+    "stefan-jansen/zipline-reloaded": {
+      "package": "zipline-reloaded",
+      "version": "3.1.1",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13"
+      ],
+      "wheel_tags": [
+        "cp310",
+        "cp311",
+        "cp312",
+        "cp313"
+      ],
+      "has_sdist": true
+    },
+    "xgboosted/pandas-ta-classic": {
+      "package": "pandas-ta-classic",
+      "version": "0.8.32",
+      "requires_python": ">=3.10",
+      "python_classifiers": [
+        "3.10",
+        "3.11",
+        "3.12",
+        "3.13",
+        "3.14"
+      ],
+      "wheel_tags": [
+        "py3"
+      ],
+      "has_sdist": false
+    }
+  }
 }
