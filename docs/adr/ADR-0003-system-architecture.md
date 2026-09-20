@@ -10,6 +10,7 @@ research:
   - docs/research/oss-references.md（QNT-25，PR #6，verify-b 审中）
   - docs/research/other-markets-survey.md（QNT-26，PR #4，verify-b 审中）
 task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 ai_task_describe @ 9976805）
+revised: 2026-09-20（verify-a 第一轮 REJECT 四项：§5 基准协议、§4.1 单源不变量、§4.2 重放硬验收、allowlist 分层位置）
 ---
 
 # ADR-0003 系统架构（PROPOSED）
@@ -21,7 +22,7 @@ task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 a
 - 产品定义（AGENTS.md §1，owner 2B）：**美股 + 美股期权 + 加密（CEX 现货/USDT 永续）**、日线为主的量化研究系统；第一阶段 research / 回测，第二阶段 paper 交易。任务描述列出的 A股 / 国内期货 / 公募基金 / 港股只做接口预留（QNT-26 调研）不实现；DEX 不做（6A）。
 - 六个一级模块（任务描述）：行情看板、数据中心、研报资料、因子宫殿、策略工厂、~~实盘交易~~ → **paper 交易**（ADR-0001 D1.3）。
 - 硬约束：ADR-0001（agent 永不持有实盘凭据；实盘路径只到"订单意图 → 人工确认"）、ADR-0002（append-only、每行带 provenance、按 `ingestion_batch` 重放）、`.claude/rules/crypto-boundaries.md`（allowlist、下单类代码禁主网 host 字面量、perp 回测黄金用例）。
-- 运行环境：单机 LXC（owner 常驻检出 `/home/workspace/quantime` 只读）；数据是许可受限资产，`data/` 永不入库；仓库只放**小样本**合成/公开数据。
+- 运行环境：单机 LXC（owner 常驻检出 `/home/workspace/quantime` 只读）；数据是许可受限资产，`data/` 永不入库；仓库内 `fixtures/` **只放合成数据**（`synthetic: true` 头，AGENTS.md §2），公开数据即便许可允许也不入库，只经摄取进入 `data/`。
 - 任务描述要求"计算高性能"与"DuckDB + Parquet 按 市场/品种/数据类型/周期 分目录存储"，两者与 ADR-0002 D2.6/D2.7 同向。
 
 ## 2. Decision — 技术栈（owner 2026-09-19 裁决，直接采用）
@@ -48,10 +49,10 @@ task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 a
 | 数据中心 | `packages/data` | 数据源适配（`DataSource` 接口）、摄取任务、`ingestion_batch` 写入、缺口/重复核查、Parquet 落盘、DuckDB 视图注册 |
 | 因子宫殿 | `packages/factors` | 因子表达式（字符串 DSL → DuckDB SQL / numpy 算子）、因子计算与缓存、IC/分层收益评估、因子库元数据 |
 | 策略工厂 | `packages/backtest` + `packages/portfolio` | 向量化日线回测引擎（手续费/滑点/资金费率）、前视检测自检、组合优化（等权/风险平价/均值-方差）、绩效报告；与 vectorbt（首选）/ bt（备选）对拍 |
-| paper 交易 | `packages/execution` + `packages/risk` | 多账户 paper/testnet 适配、订单意图生成、allowlist 启动断言、风控限额（仓位/回撤/杠杆）、告警；**无实盘下单代码** |
+| paper 交易 | `packages/execution` + `packages/risk` | 多账户 paper/testnet 适配、订单意图生成、交易 host 启动断言（校验逻辑在 `core/allowlist.py`，见 §3.3）、风控限额（仓位/回撤/杠杆）、告警；**无实盘下单代码** |
 | 行情看板 / 研报资料（后端） | `packages/api` | FastAPI 应用：行情/因子/回测/资料索引只读 API；写操作仅限研报元数据与用户笔记 |
 | 行情看板 / 研报资料（前端） | `apps/web` | React 单页：K 线（Lightweight Charts）、因子面板、回测报告、资料索引与检索 |
-| 横切 | `packages/core` | `Market` / `Instrument` / `Calendar` 抽象、Parquet 路径规范、`run_id`/`batch_id` 生成、配置与 `op` 注入读取、日志 |
+| 横切 | `packages/core` | `Market` / `Instrument` / `Calendar` / `DataSource` 抽象、Parquet 路径规范、`run_id`/`batch_id` 生成、**host allowlist 数据与校验函数**（§3.3）、配置与 `op` 注入读取、日志 |
 
 与 QNT-4 骨架提案（`packages/{core,data,backtest,research,execution,risk,monitor}`）的差异及理由：
 - `research` → 拆为 `factors`（因子是独立一级模块）与 `portfolio`（组合优化与回测引擎解耦，便于对拍时只替换引擎）。
@@ -65,12 +66,13 @@ task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 a
 pyproject.toml            # uv workspace root
 uv.lock
 packages/
-  core/       quantime_core/       {markets.py, instruments.py, calendar.py, paths.py, ids.py, config.py}
+  core/       quantime_core/       {markets.py, instruments.py, calendar.py, datasource.py, paths.py, ids.py, config.py,
+                                    allowlist.py}   # allowlist：host 表 + 校验函数（§3.3）
   data/       quantime_data/       {sources/{base.py, binance_public.py}, ingest.py, batches.py, checks.py, views.py}
   factors/    quantime_factors/    {expr/{parser.py, ops.py}, compute.py, evaluate.py, registry.py}
   backtest/   quantime_backtest/   {engine.py, costs.py, funding.py, lookahead.py, report.py, crosscheck/{vectorbt_ref.py, bt_ref.py}}
   portfolio/  quantime_portfolio/  {equal.py, risk_parity.py, mean_variance.py}
-  execution/  quantime_execution/  {allowlist.py, intents.py, paper/{base.py, binance_testnet.py}}
+  execution/  quantime_execution/  {startup.py, intents.py, paper/{base.py, binance_testnet.py}}   # startup：交易 host fail-closed 断言，调 core.allowlist
   risk/       quantime_risk/       {limits.py, monitor.py, alerts.py}
   api/        quantime_api/        {main.py, routers/{market.py, factors.py, backtests.py, library.py}}
 apps/web/                          # React + TS, Vite, Lightweight Charts
@@ -82,6 +84,15 @@ systemd/                           # unit 模板（*.tpl），值由 op 注入
 
 命名规则：Python 包名前缀 `quantime_`；每个 package 独立 `pyproject.toml`，互相依赖只允许**向下**（`api → {factors,backtest,portfolio,execution,risk,data} → core`；`execution/risk` 不得 import `backtest`；`data` 不得 import 任何上层）。依赖方向由 CI 的 import-linter 规则守卫（实现卡 QNT-27）。
 
+### 3.3 host allowlist 的装配位置（crypto-boundaries ①② 与分层规则的调和）
+
+crypto-boundaries ① 写的是 `execution/allowlist.py`，但 `data`（摄取入口）不得 import `execution`。调和方式：**allowlist 的数据与校验函数放在 `packages/core/allowlist.py`**，`execution` 与 `data` 都向下依赖它；crypto-boundaries ① 的路径写法视为"allowlist 单一真相源"的逻辑名，其物理位置以本节为准（见 §9.10，需回写 rules 文件）。
+
+- `core/allowlist.py` 只含纯数据 + 纯函数，无网络、无凭据读取：`ALLOWLIST: tuple[HostEntry, ...]`，`HostEntry(host, kind ∈ {trading, public_readonly}, exchange, doc_url)`；`assert_trading_host(host)`（只接受 `kind='trading'`，即 ADR-0001 D1.7 集合，fail-closed）；`assert_public_readonly_host(host)`（只接受 `kind='public_readonly'`）。两个函数互不放行对方类别：公共只读 host 永不能通过 `assert_trading_host`，反之亦然。
+- `execution/startup.py`：进程启动时对所有配置的交易 host 调 `assert_trading_host`，任一失败即退出（ADR-0001 D1.7 fail-closed；OKX/Bitget 请求头校验也在此）。
+- `data/sources/base.py`：`DataSource` 实现类声明 `hosts: tuple[str, ...]`，基类 `__init__` 对每个 host 调 `assert_public_readonly_host`；因此 `data.binance.vision` / `data-api.binance.vision` 必须以 `kind='public_readonly'` 进入 `ALLOWLIST` 才能被摄取代码使用（crypto-boundaries ② 的公共只读例外、ADR-0001 D1.8）。
+- CI grep（crypto-boundaries ②）范围不变：`packages/execution/**`、`packages/risk/**` 及任何持凭据模块禁止主网 host 字面量；`core/allowlist.py` 是**唯一**允许出现 `public_readonly` host 字面量的文件，且该文件本身不得 import 任何网络客户端（import-linter 规则）。
+
 ## 4. Decision — 数据层：Parquet 分区 + DuckDB 视图 + append-only 落地
 
 ### 4.1 目录规范（承接任务描述【描述2】，与 ADR-0002 D2.6/D2.7 对齐）
@@ -90,14 +101,17 @@ systemd/                           # unit 模板（*.tpl），值由 op 注入
 data/
   raw/<source>/<batch_id>/...                         # 原始响应 JSONL/zip，按 batch 不可变（D2.6）
   lake/<market>/<asset_class>/<datatype>/<freq>/<symbol_or_universe>/
-       batch=<batch_id>/part-0000.parquet             # 归一化数据；一个 batch 只写新文件，永不改旧文件
-  meta/{trading_calendar,instrument_meta,adjust_factor,ingestion_batch,source_conflict}/
-       batch=<batch_id>/part-0000.parquet
+       source=<source>/batch=<batch_id>/part-0000.parquet   # 归一化数据；一个 batch 只写新文件，永不改旧文件
+  meta/{trading_calendar,instrument_meta,adjust_factor,source_conflict}/
+       source=<source>/batch=<batch_id>/part-0000.parquet
+  meta/ingestion_batch/batch=<batch_id>/part-0000.parquet   # 唯一无 source 分区的表：它本身是 source→文件清单
   runs/<run_id>/{manifest.json, results/*.parquet}    # 回测/研究 run 产物（D2.4 data_snapshot 落在 manifest）
 ```
 
 - 路径分量取值受 `packages/core/paths.py` 的枚举约束：`market ∈ {crypto, us, cn, hk}`；`asset_class ∈ {spot, perp, delivery, equity, etf, option, future, fund}`；`datatype ∈ {kline, trade, agg_trade, funding, open_interest, mark_price, book_depth, nav, dividend, corp_action}`；`freq ∈ {1m, 5m, 15m, 1h, 4h, 1d, 1w, 1mo, tick, event}`。**周期命名统一用 Vision 文件名口径 `1mo`，不用 REST 的 `1M`**（QNT-24 矛盾项，避免大小写歧义）。
 - 每个 Parquet 行必带 ADR-0002 列：`source, source_version, ingested_at, run_id, batch_id`。
+- **单源不变量（承接 ADR-0002 D2.5）**：一个 `batch_id` 只属于一个 `source`；一个 Parquet 文件内所有行的 `source` 列必须等于其路径的 `source=` 分量（写入侧断言，`checks.py` 抽样复核）。`raw/<source>/<batch_id>/` 天然单源。因此许可驱动的删除 = `rm -r data/raw/<source>/ data/lake/**/source=<source>/ data/meta/**/source=<source>/` + 在 `ingestion_batch` 追加 `tombstone` 行（`kind='license_drop'`，仍 append-only），逐行重写永不发生；执行前须 owner 确认并记 ADR 修订（D2.5 不变）。`source_conflict` 表按**写入方 source** 分区（冲突记录归属于发现冲突的那次摄取），删源时随之整体删除。
+- source→文件清单：`SELECT source, manifest_path FROM ingestion_batch WHERE source = ?` 即得该源全部文件（每个 batch 的 `manifest_path` 列出其所有 `part-*.parquet` 与 raw 文件及 sha）；删除前用它核对实际删除范围，删除后视图因 join 不到 `ingestion_batch` 有效行而自动不再暴露该源。
 - 只 insert 的落地方式：**新 batch = 新目录**；重跑同一区间写新 `batch_id`，`source_version` 不变、附 `rerun_of=<batch_id>`；"当前视图"由 DuckDB 视图 `latest_per_source` 按 `(natural key, source)` 取最大 `batch_id`。
 - 上游归档（Vision zip）**可被替换**（QNT-24 verify-b 指正）：重放只依赖本地 `raw/` 副本与 `ingestion_batch.content_sha256`，永不把上游 URL 当作快照。
 
@@ -105,22 +119,52 @@ data/
 
 - 单文件 `data/quantime.duckdb` 只存**视图定义与宏**（可从仓库内 SQL 重建，`packages/data/views.py` 幂等注册）；不存业务行。丢掉该文件不丢数据。
 - 查询经 `read_parquet('data/lake/.../batch=*/**.parquet', hive_partitioning=true)`；复权价、连续合约等**派生价在视图层合成**，不落盘（QNT-26 §3.4 第 3 条）。
-- 重放：run 的 `manifest.json` 记录 `{tables: {name: {max_batch_id, file_list, sha256s}}, config_hash, git_commit}`；重放读 manifest 的**精确文件清单**而非 `batch_id ≤ N`（回应 ADR-0002 未决项第 2 条，见 §9.4）。
+- 重放：run 的 `manifest.json` 记录 `{tables: {name: {batch_ids: [...], files: [{path, sha256, size}]}}, config_hash, git_commit, result_sha256}`；重放读 manifest 的**精确文件清单**而非 `batch_id ≤ N`（回应 ADR-0002 未决项第 2 条，见 §9.4）。`batch_ids` 只能包含 run 开始时刻 `ingestion_batch` 中**已提交**的 batch（§4.3 提交顺序保证"已提交 ⇒ 文件完整且 sha 已知"）。
+
+**重放硬验收（写进 QNT-27 验收，verify 须复现 + 变异）**：
+- R1 **hash 校验强制**：`replay(run_id)` 在读任何数据前逐文件校验 `sha256` 与 `size`；任一文件缺失、sha 不符、或 manifest 外多出的文件被视图扫到 → 抛 `ReplayIntegrityError` 并**拒绝重放**，不降级、不跳过。DuckDB 读取用显式文件列表 `read_parquet([...])`，不用 glob，保证 manifest 外文件在物理上不可达。
+- R2 **逐字节一致（D2.4）**：重放产出的 `results/*.parquet` 的 `sha256` 必须等于 manifest 的 `result_sha256`；写 Parquet 时固定 writer 参数（行组大小、压缩、无 statistics 时间戳、列顺序）并在 `packages/core/parquet_io.py` 集中，确保 determinism。
+- R3 **晚到/乱序提交不影响旧 run**：测试固定序列——batch 1 开始、batch 2 开始并提交、run R 在此时刻建 manifest（只含 batch 2）、batch 1 之后提交；`replay(R)` 结果与首跑逐字节一致且不含 batch 1 的行。
+- R4 **源文件变异被拒绝**：测试对 manifest 中任一 Parquet 翻转一个字节 / 删除一个文件 / 在同分区下新增一个未登记 `part-0001.parquet`，三种情形 `replay(R)` 均抛 `ReplayIntegrityError`（不是静默得到不同结果）。
+- R5 **`ingestion_batch` 自身也在清单内**：manifest 记录 run 所依赖的 `ingestion_batch` 文件与 sha，防止用改写的 batch 表"合法化"未登记文件。
 
 ### 4.3 `ingestion_batch` 表（ADR-0002 D2.7 落地）
 
-`batch_id`（ULID，单调）、`source`、`source_version`、`market/asset_class/datatype/freq/scope`、`range_start/range_end`、`row_count`、`content_sha256`（归一化 Parquet 的 sha）、`raw_sha256`（raw 文件 sha）、`manifest_path`、`committed_at`、`rerun_of`、`run_id`。写入顺序：先落 raw → 写归一化 Parquet 到临时名 → 计算 sha → rename 到最终路径 → 最后 insert `ingestion_batch` 行；**未出现在 `ingestion_batch` 的文件视为不存在**（视图只 join 已提交 batch）。
+`batch_id`（ULID，单调）、`source`（单值，§4.1 单源不变量）、`source_version`、`market/asset_class/datatype/freq/scope`、`range_start/range_end`、`row_count`、`content_sha256`（归一化 Parquet 的 sha）、`raw_sha256`（raw 文件 sha）、`manifest_path`（该 batch 的文件级清单：每个 part 与 raw 文件的 path/sha256/size）、`committed_at`、`rerun_of`、`run_id`、`kind ∈ {ingest, rerun, license_drop}`。写入顺序：先落 raw → 写归一化 Parquet 到临时名（`.tmp-<batch_id>`，位于最终目录外的 `data/_staging/`）→ 计算 sha → rename 到最终路径 → 最后 insert `ingestion_batch` 行；**未出现在 `ingestion_batch` 的文件视为不存在**（视图只 join 已提交 batch；§4.2 R1 保证 run 层面也读不到）。
 
 ## 5. Decision — 性能策略与可量化验收
 
 - 热路径（因子计算、回测撮合、绩效统计）只允许 DuckDB SQL、numpy 数组、可选 polars；禁止 Python 行级循环与 pandas `apply`。
 - 因子用**字符串表达式 DSL**（借鉴 qlib `ops.py` 的 Rolling 算子族语义，QNT-25 §4.1；qlib 本身装不上 3.14，不作依赖），解析为 DuckDB 窗口函数或 numpy 算子；表达式字符串即因子定义，随结果一起存储（可解释、可 diff、可重放）。
 - 指标预热期（unstable period）必须显式截断（QNT-25 §4.3）；推理期/训练期处理分离防前视泄漏（QNT-25 §4.1 ②）。
-- 基准（写进 QNT-29 / QNT-30 验收，合成数据、单机 LXC 4 vCPU 口径，实现卡校准后允许 ±50% 内修订本节数字）：
-  - 因子：1,000 标的 × 5 年日线（≈1.26M 行）× 20 因子，全量计算 **< 30 s**，增量一日 **< 2 s**。
-  - 回测：同数据集单策略、日频再平衡，含手续费/滑点/资金费率，**< 10 s**；与 vectorbt 对拍差异在预先统一的成本模型下 equity curve 逐日相对误差 **< 1e-9**（浮点口径）。
-  - 摄取：Vision 日 K 线 zip 1 个月 × 300 币对，解压+归一化+落盘 **< 60 s**。
-  - API：行情看板单标的 5 年日 K 请求 p95 **< 200 ms**（DuckDB 直查 Parquet，无额外缓存层）。
+### 5.1 基准协议（固定输入 + 固定测量；写进 QNT-27/28/29/30/31 验收）
+
+**基准输入（`fixtures/bench/` 由 QNT-27 落地，生成脚本入库，生成物不入库）**
+- 合成数据：`bench_gen.py --seed 20260920 --symbols 1000 --days 1260 --start 2021-01-04`，几何布朗运动日 K（`mu=0, sigma=0.02/√252`，`open=prev_close`，`high/low = close·(1±|N(0,0.01)|)`，`volume ~ LogNormal(12, 1)`），`freq=1d`，`market=crypto/asset_class=spot`，交易日按 `CRYPTO_24_7` 日历取自然日；输出经 §4.3 流程写为 1 个 batch，`ingestion_batch.content_sha256` 由脚本打印并**写进验收报告**，任何实现的基准输入 sha 必须一致。
+- 固定 20 因子（表达式 DSL，QNT-29 按此清单实现，不许替换）：`ret_1, ret_5, ret_20, ma_5/close-1, ma_20/close-1, ma_60/close-1, std_20(ret_1), std_60(ret_1), max_20(high)/close-1, min_20(low)/close-1, rsi_14, ts_rank_20(close), corr_20(close, volume), skew_20(ret_1), kurt_20(ret_1), vol_ratio_5_20, amihud_20, macd_12_26_9, bb_pos_20_2, mom_reversal_20_5`（定义写在 `fixtures/bench/factors.yaml`，随 ADR 修订）。
+- 固定策略与成本（QNT-30）：每日 `ts_rank_20(close)` 截面 top 10% 等权多头，日频再平衡，全仓；手续费 `10 bp` 单边、滑点 `5 bp` 固定比例、资金费率 `0`（现货基准；perp 黄金用例另计，crypto-boundaries ③）；初始资金 `1e6`。
+- 摄取基准输入：合成 Vision 风格 zip（同 seed，`300 币对 × 1 个月日 K`，CSV 列序与 Vision 一致），由 `bench_gen.py --mode vision-zip` 生成，不走网络。
+- API 基准：单标的 5 年日 K（1,260 行）`GET /market/klines?symbol=...&freq=1d`，**1 个并发**，预热 20 次后测 200 次，取 p95；`uvicorn` 单 worker。
+
+**测量协议**
+- 机器口径：`4 vCPU / 8 GB RAM` 的 LXC，`DUCKDB_THREADS=4`、`OMP_NUM_THREADS=4`、`POLARS_MAX_THREADS=4`，单进程；基准脚本在开头打印 `os.cpu_count()`、`duckdb.execute("select current_setting('threads')")`、内存上限，并写入报告。
+- **冷缓存**：每次计时前 `sync; echo 3 > /proc/sys/vm/drop_caches`（需 root 时改为：新进程 + 读取一份未被读过的 fixtures 副本，并在报告注明"warm-fs"）；DuckDB 每次新建连接（无对象缓存）。
+- 计时边界：`time.perf_counter()` 包住"读 Parquet → 计算 → 写结果 Parquet 到 `data/runs/<run_id>/`"全程，**不含**进程启动与 import；增量一日 = 已有 1,259 日结果的前提下新增 1 日并落盘。
+- 重复：**5 次取中位数**，同时报告 min/max；中位数达标即通过；报告格式固定为 `bench_report.json`（`{name, median_s, min_s, max_s, threads, mem_mb, input_sha256, git_commit}`），贴进 PR 描述。
+- 对拍精度：equity curve 逐日相对误差 `|a-b| / max(|b|, 1e-12) < 1e-9`，参照实现用 vectorbt 在**同一成本模型、同一权重序列**下计算（成本模型的 vectorbt 参数映射写入 `crosscheck/vectorbt_ref.py` 并在报告列出）。
+
+### 5.2 阈值（中位数口径）
+
+| 基准 | 阈值 | 归属卡 |
+|---|---|---|
+| 因子全量：1,000 标的 × 1,260 日 × 20 因子 | **< 30 s** | QNT-29 |
+| 因子增量一日 | **< 2 s** | QNT-29 |
+| 回测：固定策略 + 成本，1,000 × 1,260 | **< 10 s** | QNT-30 |
+| 回测对拍 vs vectorbt | 逐日相对误差 **< 1e-9** | QNT-30 |
+| 摄取：300 币对 × 1 月合成 Vision zip，解压+归一化+落盘（含 sha） | **< 60 s** | QNT-28 |
+| API：单标的 5 年日 K，1 并发 p95 | **< 200 ms** | QNT-31 |
+
+**阈值修订规则**：实现卡不得自行放宽。若实测中位数超阈值，实现卡在四段式"偏离项"里贴 `bench_report.json` 与 profile（DuckDB `EXPLAIN ANALYZE` 或 `py-spy` 火焰图文字摘要），由 planner 提 ADR-0003 修订 PR，**owner 批准**后阈值才生效；单次修订上限 ±50%，累计放宽超过 2× 原值必须重议实现方案而非改数字。收紧阈值同样走修订，但不需 owner 批准（planner 可提，verify 复核）。
 
 ## 6. Decision — 前后端边界
 
@@ -136,13 +180,13 @@ data/
 - `Market`：`market_id`、`asset_classes`、`default_calendar_id`、`quote_currency_rules`。
 - `Instrument`：以 `instrument_meta` 表（QNT-26 §3.2）为持久形态——`instrument_id` 稳定不复用；`effective_from/to` 版本区间；`multiplier` + `multiplier_unit`；`tick_size | tick_rule_ref`；`price_limit_kind/params`；`settlement_kind`；`exercise_style/expiry_rule`；`underlying_id`；`calendar_id`。加密第一版填 `market='crypto'`、`asset_class ∈ {spot, perp}`、`multiplier_unit='contracts'`、`price_limit_kind='none'`。
 - `Calendar`：以 `trading_calendar` 会话表（QNT-26 §3.1）为持久形态——`calendar_id`（MIC 或 `CRYPTO_24_7`）、`session_date`、`session_seq`、`session_kind`、`open_utc/close_utc`、`local_tz`、`is_half_day`。加密为 24/7 单会话，但**仍落库**（资金费率结算时点 00/08/16 UTC 作为 `session_kind='funding'` 行），不用代码常量。`exchange_calendars`（Apache-2.0）只作二期初始化与交叉校验来源，会话行必须带 `source` 落库（可重放）。
-- `DataSource`：`fetch(scope, range) -> RawBatch`、`normalize(RawBatch) -> Arrow table`、`capabilities()`；实现类必须声明 `hosts` 并通过 `execution/allowlist.py`（公共只读端点标 `public_readonly=true`，crypto-boundaries ②）。第一实现 `BinancePublicSource`：`data.binance.vision` 归档 + `data-api.binance.vision` 无 key 镜像；**不使用** `api.binance.com` 主 host（美国节点 451，QNT-24 §0）。
+- `DataSource`（Protocol 定义在 `core/datasource.py`，实现在 `data/sources/`）：`fetch(scope, range) -> RawBatch`、`normalize(RawBatch) -> Arrow table`、`capabilities()`；实现类必须声明 `hosts` 并通过 `core/allowlist.assert_public_readonly_host`（§3.3；条目 `kind='public_readonly'`，crypto-boundaries ②、ADR-0001 D1.8），**不依赖 `execution`**。第一实现 `BinancePublicSource`：`data.binance.vision` 归档 + `data-api.binance.vision` 无 key 镜像；**不使用** `api.binance.com` 主 host（美国节点 451，QNT-24 §0）。
 - 复权 / 拼接：`adjust_factor` 表（QNT-26 §3.3）带 `adjust_kind`、`factor_kind`、`direction`、`disclosure_date`；**只存因子不存复权价**。加密第一版此表为空但 schema 已定。
 
 ## 8. Decision — paper 交易模块边界（任务描述"实盘交易"的降级）
 
 - 模块名、包名、UI 文案统一为 **paper 交易**；仓库内不存在实盘下单端点调用（ADR-0001 D1.3）。
-- 凭据：只允许 ADR-0001 D1.6 枚举的 testnet/demo key，来自 vault `quant-dev`，`op read` 注入；host 必须 ∈ D1.7 allowlist，启动断言 fail-closed。
+- 凭据：只允许 ADR-0001 D1.6 枚举的 testnet/demo key，来自 vault `quant-dev`，`op read` 注入；host 必须 ∈ D1.7 allowlist（`core/allowlist.py` 中 `kind='trading'` 条目），`execution/startup.py` 启动断言 fail-closed（§3.3）。
 - 实盘路径唯一形态：`intents.parquet`（append-only）+ 前端"待人工确认"只读列表；确认与执行发生在 agent 不可达环境（owner 手动）。
 - 多账户 / 多策略并行 / 风控限额 / 告警按 QNT-33 验收；风控事件 append-only 记 `risk_events`。
 
@@ -151,18 +195,21 @@ data/
 1. **市场范围**：任务描述要求 A股/国内期货/公募基金/港股/美股/数字货币（CEX、DEX、现货、合约）全做；AGENTS.md §1 与 owner 2B 限定"美股 + 美股期权 + 加密"，其他只留接口，DEX 不做（6A）。→ 本 ADR 按 2B/6A 执行；范围扩展需修订 AGENTS.md §1 与本 ADR。
 2. **"实盘交易"模块**：与 ADR-0001 D1.1/D1.3 冲突 → 降级为 paper 交易（§8，owner 1A）。
 3. **Python 3.14.5**：补丁号存在性未验证（矛盾 #21）→ 写 `>=3.14`。
-4. **ADR-0002 未决项第 2 条（batch 乱序提交）**：本 ADR §4.2 用"manifest 记录精确文件清单 + sha"代替 `batch_id ≤ N` 水位，属于对 D2.7 的**收紧实现**而非修改决策；是否将此写回 ADR-0002 修订，待 owner 裁决。
+4. **ADR-0002 未决项第 2 条（batch 乱序提交）**：本 ADR §4.2 用"manifest 记录精确文件清单 + sha，重放强制校验（R1–R5）"代替 `batch_id ≤ N` 水位，属于对 D2.7 的**收紧实现**而非修改决策；是否将此写回 ADR-0002 修订（同时把 D2.4 的 `max(ingested_at)` 措辞改为 manifest 文件清单），待 owner 裁决。
 5. **Binance 主 host 451**：任务描述以 Binance 为示例，但美国节点 `api.binance.com`/`fapi.binance.com` 不可达（QNT-5/QNT-24）；第一版数据源改用 `data.binance.vision` 归档 + `data-api.binance.vision` 镜像（现货）。**U 本位永续 REST 无无 key 镜像**，永续数据第一版只有 Vision 归档（funding/metrics 月文件，延迟 T+1）→ 行情看板的"实时"永续行情第一阶段不可达，待 owner 决定是否接受 T+1 或另选源。
 6. **vectorbt 许可**：Apache-2.0 + Commons Clause（QNT-25 §7.2）；作为**对拍参照的开发依赖**（不随产品分发）内部研究可用；若 quantime 未来商业化需 owner 裁决是否换 bt（MIT）为首选。
 7. **研报资料模块**：任务描述隐含抓取研报全文；owner 4A 限定为"元数据 + 链接 + 用户自有文件索引"（§6 `library` router）。
 8. **公司行为与期权调整数据源**：美股期权 OCC 调整、分红拆股因子的免费公开源许可尚未逐一核到一手原文（QNT-26 §4）；`adjust_factor` schema 已定但美股填充源待 Stage 3 调研卡。
-9. **ADR-0001 未决项**（D1.8 transfer 权限、Bybit demo 公共行情主网 host、D1.9 合规表述）仍未闭合；本 ADR §7 的 `public_readonly=true` allowlist 条目是对第 2 条的架构侧回应，法律/政策项不在本文范围。
+9. **ADR-0001 未决项**（D1.8 transfer 权限、Bybit demo 公共行情主网 host、D1.9 合规表述）仍未闭合；本 ADR §3.3 的 `kind='public_readonly'` allowlist 条目是对第 2 条的架构侧回应，法律/政策项不在本文范围。
+10. **crypto-boundaries ① 路径措辞**：rules 文件写 `execution/allowlist.py`，本 ADR §3.3 把 allowlist 放到 `core/allowlist.py`（否则 `data` 必须 import `execution`，违反 §3 分层）。语义（单一 allowlist、附官方文档链接、`public_readonly` 例外）不变，仅物理位置不同；需 owner 批准后由 QNT-27 顺带回写 `.claude/rules/crypto-boundaries.md` ① 的路径。
+11. **fixtures 数据口径**：QNT-23 卡面写"仓库只放小样本合成/公开数据"，AGENTS.md §2 写"`fixtures/` 只放合成数据"；本 ADR §1 与 §3.2 按 AGENTS.md（仅合成）执行，公开数据只经摄取进入 `data/`。卡面措辞由 planner 在卡上修正。
+12. **ADR-0002 D2.6 raw 分文件粒度**：D2.6 写 `source/quote_date`，本 ADR §4.1 用 `raw/<source>/<batch_id>/`（batch 内可再按日期分文件）；`source` 仍是第一层，D2.5 整体删源不受影响。是否回写 D2.6 措辞随第 4 条一并裁决。
 
 ## 10. Consequences / Revisit trigger
 
 + 单机零外部服务、全部状态在 Parquet + 仓库 SQL 里可重建；任何 run 由 manifest 精确重放；模块依赖单向，对拍只需替换引擎。
 − Parquet 多版本存储放大；DuckDB 每次冷启需注册视图；无消息队列意味着摄取与回测都是 systemd timer 驱动的批处理，无实时流。
-需新增（对应实现卡）：QNT-27 骨架 + 数据层基础 + import-linter + CI；QNT-28 Binance 公开摄取；QNT-29 因子 DSL 与评估；QNT-30 回测/组合/对拍（`hard`）；QNT-31 API + 前端骨架；QNT-32 研报索引；QNT-33 paper 交易（`hard`）。
+需新增（对应实现卡）：QNT-27 骨架 + 数据层基础（§4.3 提交流程、§4.2 R1–R5 重放校验、§4.1 单源断言、`core/allowlist.py`、`fixtures/bench/bench_gen.py`）+ import-linter + CI；QNT-28 Binance 公开摄取；QNT-29 因子 DSL 与评估；QNT-30 回测/组合/对拍（`hard`）；QNT-31 API + 前端骨架；QNT-32 研报索引；QNT-33 paper 交易（`hard`）。
 
 Revisit：单表（单 lake 前缀）> 50 GB 或视图 p95 > 5 s；需要分钟级实时行情；出现第二个写入者（多进程摄取）；owner 决定扩展市场范围或进入实盘；polars/numba 需成为基线依赖。
 
