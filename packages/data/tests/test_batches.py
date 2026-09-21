@@ -323,7 +323,7 @@ def test_publishing_over_an_existing_final_file_is_refused_not_overwritten(root,
     target = root / b.parts[0].path
     before = target.read_bytes()
     with pytest.raises(parquet_io.AlreadyPublishedError):
-        parquet_io.publish_bytes(target, b"tampered")
+        parquet_io.publish_bytes(target, b"tampered", staging=batches.publish_staging(root))
     assert target.read_bytes() == before
 
 

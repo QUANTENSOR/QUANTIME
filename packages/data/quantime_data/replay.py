@@ -19,7 +19,13 @@ from quantime_core import parquet_io
 from quantime_core.ids import assert_valid_id
 from quantime_core.paths import run_manifest_path, run_results_dir
 
-from .batches import CommittedBatch, FileEntry, batch_manifest_path, committed_batch_files
+from .batches import (
+    CommittedBatch,
+    FileEntry,
+    batch_manifest_path,
+    committed_batch_files,
+    publish_staging,
+)
 
 MANIFEST_VERSION = 1
 
@@ -236,13 +242,15 @@ def write_manifest(root: str | os.PathLike[str], manifest: Manifest) -> Path:
     """独占发布一个 run 的 `manifest.json`。
 
     同一 `run_id` 二次写入 → `ReplayIntegrityError`，**原文件字节不变**（verify-a P1-4：
-    静默覆盖可以换掉重放的输入与基准 hash）。改输入请用新 `run_id`。
+    静默覆盖可以换掉重放的输入与基准 hash）。发布是原子的（staging 写完再 link），
+    因此 `read_manifest` 永远读不到半个清单。
     """
-    path = Path(root) / run_manifest_path(manifest.run_id)
+    root = Path(root)
+    path = root / run_manifest_path(manifest.run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(manifest.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     try:
-        parquet_io.publish_text(path, payload)
+        parquet_io.publish_text(path, payload, staging=publish_staging(root))
     except parquet_io.AlreadyPublishedError as exc:
         raise ReplayIntegrityError(
             f"run {manifest.run_id} 的 manifest 已发布，拒绝覆盖（请用新 run_id）: {path}"
@@ -333,13 +341,15 @@ def write_result(
 ) -> tuple[Path, str]:
     """把 run 结果确定性写到 `data/runs/<run_id>/results/`，回传路径与 sha256。
 
-    结果文件同样不可覆盖：同名二次写 → `ReplayIntegrityError`，原文件字节不变。
+    结果文件同样不可覆盖：同名二次写 → `ReplayIntegrityError`，原文件字节不变；
+    且同样原子发布，不会出现半写的结果文件。
     """
-    results = Path(root) / run_results_dir(run_id)
+    root = Path(root)
+    results = root / run_results_dir(run_id)
     results.mkdir(parents=True, exist_ok=True)
     target = results / name
     try:
-        sha = parquet_io.publish_table(table, target, columns)
+        sha = parquet_io.publish_table(table, target, columns, staging=publish_staging(root))
     except parquet_io.AlreadyPublishedError as exc:
         raise ReplayIntegrityError(
             f"run {run_id} 的结果 {name} 已发布，拒绝覆盖（请用新 run_id）: {target}"

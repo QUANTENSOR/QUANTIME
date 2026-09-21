@@ -109,9 +109,9 @@ mutate "P1-1 batch_id 全局唯一性登记（独占创建）" "$DATA/batches.py
   'claim.touch(exist_ok=False)=>>claim.touch(exist_ok=True)' \
   packages/data/tests/test_batches.py::test_same_batch_id_second_commit_leaves_every_file_byte_identical
 
-# P1-1b：最终 Parquet 回到 os.replace（静默盖写）——独占发布语义消失。
-mutate "P1-1b 最终文件不存在才发布（os.link → os.replace）" "$DATA/batches.py" \
-  'os.link(tmp, final)=>>os.replace(tmp, final)' \
+# P1-1b：发布回到 os.replace（静默盖写）——不可覆盖语义消失。
+mutate "P1-1b 最终文件不存在才发布（os.link → os.replace）" "$CORE/parquet_io.py" \
+  'os.link(tmp, target)=>>os.replace(tmp, target)' \
   packages/data/tests/test_batches.py::test_final_part_publish_refuses_an_existing_file_even_if_earlier_checks_pass
 
 # P1-2：provenance 校验退回校验**投影前**的表——columns 投影重新可以绕过五列。
@@ -126,13 +126,50 @@ mutate "P1-3 清单只认提交时固定的 batch_manifest" "$DATA/replay.py" \
 
 # P1-4：run 清单回到 write_text（静默覆盖）——二次 write_manifest 可换掉重放输入与基准 hash。
 mutate "P1-4 run 清单不可覆盖" "$DATA/replay.py" \
-  'parquet_io.publish_text(path, payload)=>>path.write_text(payload, encoding="utf-8")' \
+  'parquet_io.publish_text(path, payload, staging=publish_staging(root))=>>path.write_text(payload, encoding="utf-8")' \
   packages/data/tests/test_replay.py::test_write_manifest_twice_is_rejected_and_bytes_are_unchanged
 
 # P1-4b：结果文件回到可覆盖写。
 mutate "P1-4b 重放结果文件不可覆盖" "$DATA/replay.py" \
-  'sha = parquet_io.publish_table(table, target, columns)=>>sha = parquet_io.write_table(table, target, columns)' \
+  'sha = parquet_io.publish_table(table, target, columns, staging=publish_staging(root))=>>sha = parquet_io.write_table(table, target, columns)' \
   packages/data/tests/test_replay.py::test_write_result_twice_is_rejected_and_bytes_are_unchanged
+
+# ---- QNT-27 返修 R2：verify-a 第二轮 P1「独占创建 ≠ 原子发布」 ----
+
+# R2-1：退回「最终路径 O_EXCL 创建后再写 payload」——创建与写入之间该路径以 size=0 可见，
+# 并发读侧会把在途文件登记进 manifest（verify-a 的原始复现）。
+mutate "R2-1 原子发布（不在最终路径上先创建后写）" "$CORE/parquet_io.py" \
+  'tmp = _write_tmp(Path(staging), payload)
+    try:
+        _link_exclusive(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)=>>fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)' \
+  packages/data/tests/test_concurrent_publish.py::test_in_flight_batch_is_invisible_to_readers_until_publish_lands
+
+# R2-2：tmp 改写进最终路径旁边（湖/meta 的 batch 目录内）——虽然 link 时已完整，
+# 但在途 tmp 落在枚举范围内，会被目录扫描当成「多出未登记文件」。
+mutate "R2-2 tmp 必须在最终枚举范围之外" "$CORE/parquet_io.py" \
+  'tmp = _write_tmp(Path(staging), payload)=>>tmp = _write_tmp(target.parent, payload)' \
+  packages/data/tests/test_concurrent_publish.py::test_publish_writes_its_tmp_outside_every_enumerated_directory
+
+# R2-3：跳过 fsync/close 直接 link——tmp 未确保完整就发布。
+mutate "R2-3 tmp 写完 fsync + close 之后才发布" "$CORE/parquet_io.py" \
+  'os.fsync(fd)
+        finally:
+            os.close(fd)=>>pass
+        finally:
+            pass' \
+  packages/data/tests/test_concurrent_publish.py::test_interrupted_write_leaves_no_final_file_and_no_visible_residue
+
+# R2-4：data 层把 staging 指回最终目录——core 的两段式还在，但中转站选错了位置，
+# 在途 tmp 重新落进读侧枚举范围。这与 R2-2 是两个独立的接缝（原语 vs. 调用方选址）。
+mutate "R2-4 staging 目录必须在枚举范围之外" "$DATA/batches.py" \
+  'return root / staging_dir()=>>return root / "data" / "meta" / "ingestion_batch"' \
+  packages/data/tests/test_concurrent_publish.py::test_publish_writes_its_tmp_outside_every_enumerated_directory
 
 # P2：CI 注释过滤退回失效写法——ci.yml 的静态守卫步骤重新变红。
 mutate "P2 CI 注释过滤（前缀感知）" .github/workflows/ci.yml \
