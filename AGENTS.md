@@ -40,4 +40,4 @@ quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究�
 
 ## 6. Loaded on demand
 
-`.claude/rules/crypto-boundaries.md`（加密边界；`paths:` 指向 `packages/execution/**`、`packages/data/**`、`packages/backtest/**`、`packages/risk/**`）。Claude Code 自动加载；Codex / pi 编辑这些路径时读取。其余 `.claude/rules/<topic>.md` 与 `.claude/skills/<skill>/SKILL.md` 需要时随对应任务卡加入。
+`.claude/rules/crypto-boundaries.md`（加密边界；`paths:` 指向 `packages/core/**`、`packages/execution/**`、`packages/data/**`、`packages/backtest/**`、`packages/risk/**`）。Claude Code 自动加载；Codex / pi 编辑这些路径时读取。其余 `.claude/rules/<topic>.md` 与 `.claude/skills/<skill>/SKILL.md` 需要时随对应任务卡加入。
