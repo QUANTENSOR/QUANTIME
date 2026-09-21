@@ -48,9 +48,12 @@ jobs:
           ! grep -rEn --include='*.py' 'UPDATE|DELETE|overwrite|mode=.w.' packages/ \
             | grep -v '/tests/' | grep .
           echo "--- 非 allowlist 文件不得出现主网 host 字面量 ---"
+          # `grep -rEn` 的输出是 `path:lineno:text`，注释过滤必须剥掉这段前缀再看行首，
+          # 否则 `grep -v '^\s*#'` 永远匹配不到（QNT-27 P2：CI run 35566457361 失败点）。
+          # 范围不变（整个 packages/ 非测试代码），只修过滤方式。
           ! grep -rEn --include='*.py' \
             'api\.binance\.com|fapi\.binance\.com|api\.bybit\.com|www\.okx\.com|api\.bitget\.com' \
-            packages/ | grep -v '/tests/' | grep -v '^\s*#' | grep .
+            packages/ | grep -v '/tests/' | grep -vP '^[^:]+:\d+:\s*#' | grep .
 
       - name: Bench input reproducibility (ADR-0003 §5.1)
         run: uv run python fixtures/bench/bench_gen.py --check-expected

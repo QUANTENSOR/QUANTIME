@@ -102,6 +102,43 @@ mutate "checks 事后复核单源不变量" "$DATA/checks.py" \
   'if distinct != {expected_source}:=>>if False:' \
   packages/data/tests/test_checks.py::test_check_detects_source_mismatch_written_out_of_band
 
+# ---- QNT-27 返修 R1：verify-a 五项，每项一个变异点 ----
+
+# P1-1：唯一性锁改成「先写再检查」——锁本身失效，同 batch_id 第二次提交会落盘。
+mutate "P1-1 batch_id 全局唯一性登记（独占创建）" "$DATA/batches.py" \
+  'claim.touch(exist_ok=False)=>>claim.touch(exist_ok=True)' \
+  packages/data/tests/test_batches.py::test_same_batch_id_second_commit_leaves_every_file_byte_identical
+
+# P1-1b：最终 Parquet 回到 os.replace（静默盖写）——独占发布语义消失。
+mutate "P1-1b 最终文件不存在才发布（os.link → os.replace）" "$DATA/batches.py" \
+  'os.link(tmp, final)=>>os.replace(tmp, final)' \
+  packages/data/tests/test_batches.py::test_final_part_publish_refuses_an_existing_file_even_if_earlier_checks_pass
+
+# P1-2：provenance 校验退回校验**投影前**的表——columns 投影重新可以绕过五列。
+mutate "P1-2 provenance 校验最终落盘 schema" "$DATA/batches.py" \
+  '_assert_provenance(final_table, source=source, batch_id=batch_id)=>>_assert_provenance(table, source=source, batch_id=batch_id)' \
+  packages/data/tests/test_batches.py::test_columns_projection_dropping_provenance_is_rejected_before_any_write
+
+# P1-3：清单取证退回「扫目录」——建清单前植入的文件会被就地合法化。
+mutate "P1-3 清单只认提交时固定的 batch_manifest" "$DATA/replay.py" \
+  'files=_registered_files(root, batch.batch_id, batch.batch_dir),=>>files=tuple(_scan_dir(root, Path(root) / batch.batch_dir)),' \
+  packages/data/tests/test_replay.py::test_build_manifest_rejects_file_planted_before_the_run
+
+# P1-4：run 清单回到 write_text（静默覆盖）——二次 write_manifest 可换掉重放输入与基准 hash。
+mutate "P1-4 run 清单不可覆盖" "$DATA/replay.py" \
+  'parquet_io.publish_text(path, payload)=>>path.write_text(payload, encoding="utf-8")' \
+  packages/data/tests/test_replay.py::test_write_manifest_twice_is_rejected_and_bytes_are_unchanged
+
+# P1-4b：结果文件回到可覆盖写。
+mutate "P1-4b 重放结果文件不可覆盖" "$DATA/replay.py" \
+  'sha = parquet_io.publish_table(table, target, columns)=>>sha = parquet_io.write_table(table, target, columns)' \
+  packages/data/tests/test_replay.py::test_write_result_twice_is_rejected_and_bytes_are_unchanged
+
+# P2：CI 注释过滤退回失效写法——ci.yml 的静态守卫步骤重新变红。
+mutate "P2 CI 注释过滤（前缀感知）" .github/workflows/ci.yml \
+  "grep -vP '^[^:]+:\\d+:\\s*#'=>>grep -v '^\\s*#'" \
+  tests/test_static_guards.py::test_ci_static_guard_step_passes_as_shipped
+
 echo
 echo "== fresh 重跑（还原后全量）=="
 clean

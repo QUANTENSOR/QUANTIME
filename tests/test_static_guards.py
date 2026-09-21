@@ -122,3 +122,72 @@ def test_bench_generator_makes_no_network_calls():
     pattern = r"\b(httpx|requests|urllib|socket|websockets|curl|wget)\b"
     hits = _grep(pattern, REPO / "fixtures")
     assert hits == [], "fixtures/ 出现网络调用:\n" + "\n".join(hits)
+
+
+#: `.github/workflows/ci.yml` 里静态守卫步骤的名字——测试直接抽出它的 `run:` 脚本执行，
+#: 而不是在测试里复制一份等价管线（复制品和 CI 会各自漂移）。
+CI_WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
+CI_STATIC_GUARD_STEP = "Static guards (ADR-0002 只 insert / crypto-boundaries ②)"
+
+#: 前缀感知的注释过滤（QNT-27 P2）。`grep -rEn` 输出 `path:lineno:text`，
+#: 必须连前缀一起匹配；`^\s*#` 单独用在这种输出上永不命中，是无效过滤。
+COMMENT_FILTER = r"^[^:]+:\d+:\s*#"
+
+
+def _ci_step_script(step_name: str) -> str:
+    """从 ci.yml 抽出某个 step 的 `run: |` 脚本原文（不引第三方 YAML 解析器）。"""
+    lines = CI_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    heads = [n for n, line in enumerate(lines) if line.strip() == f"- name: {step_name}"]
+    if len(heads) != 1:
+        raise AssertionError(f"ci.yml 里 step {step_name!r} 出现 {len(heads)} 次，期望 1 次")
+    i = heads[0]
+    assert lines[i + 1].strip() == "run: |", f"step {step_name!r} 不是 `run: |` 块"
+    body_indent = len(lines[i + 2]) - len(lines[i + 2].lstrip())
+    body = []
+    for line in lines[i + 2 :]:
+        if line.strip() and len(line) - len(line.lstrip()) < body_indent:
+            break
+        body.append(line[body_indent:] if line.strip() else "")
+    return "\n".join(body)
+
+
+def _run(script: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", "-c", script], cwd=REPO, capture_output=True, text=True)
+
+
+def test_ci_static_guard_step_passes_as_shipped():
+    r"""P2（CI run 35566457361）：直接跑 ci.yml 里那段脚本，必须退出 0。
+
+    原失败点：`grep -rEn` 输出 `path:lineno:text`，后续 `grep -v '^\s*#'` 匹配不到行首，
+    allowlist.py 的说明性注释因此把 CI 打红。范围没问题，过滤方式有问题。
+    """
+    script = _ci_step_script(CI_STATIC_GUARD_STEP)
+    proc = _run(script)
+    assert proc.returncode == 0, f"ci.yml 静态守卫步骤失败:\n{proc.stdout}\n{proc.stderr}"
+
+
+def test_ci_static_guard_comment_filter_is_not_vacuous():
+    """反证：该 host 字面量确实存在（在注释里），过滤不是空集通过；旧写法仍是红的。"""
+    mainnet = r"api\.binance\.com|fapi\.binance\.com|api\.bybit\.com|www\.okx\.com|api\.bitget\.com"
+    raw = _run(f"grep -rEn --include='*.py' '{mainnet}' packages/ | grep -v '/tests/'")
+    assert raw.stdout.strip(), "没有任何命中——过滤测试成了空集通过"
+    assert all(_is_comment(ln) for ln in raw.stdout.splitlines()), (
+        "命中里有非注释行，应由 test_no_mainnet_host_literals_in_packages 拦下"
+    )
+    broken = _run(
+        f"! grep -rEn --include='*.py' '{mainnet}' packages/ "
+        f"| grep -v '/tests/' | grep -v '^\\s*#' | grep ."
+    )
+    assert broken.returncode != 0, "旧过滤写法居然通过了——这条回归测试失去意义"
+
+
+def test_ci_static_guard_keeps_full_scope_and_grants_no_exemption():
+    """修过滤方式的同时不得缩小 grep 范围、不得给 allowlist.py 开豁免（planner 派单约束）。"""
+    script = _ci_step_script(CI_STATIC_GUARD_STEP)
+    runnable = "\n".join(ln for ln in script.splitlines() if not ln.lstrip().startswith("#"))
+    assert COMMENT_FILTER in runnable, "ci.yml 未使用前缀感知的注释过滤"
+    assert "grep -v '^\\s*#'" not in runnable, "ci.yml 仍有失效的 `grep -v '^\\s*#'`"
+    assert "packages/ | grep -v '/tests/'" in runnable, "grep 范围被缩小"
+    assert "allowlist.py" not in runnable, "给 allowlist.py 开了豁免"
+    for host in ("api\\.binance\\.com", "api\\.bybit\\.com", "www\\.okx\\.com"):
+        assert host in runnable, f"host 边界被放宽，缺 {host}"

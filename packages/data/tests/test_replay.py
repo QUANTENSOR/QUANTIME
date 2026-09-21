@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pyarrow as pa
 import pytest
 from quantime_core import parquet_io
 from quantime_core.ids import new_batch_id, new_run_id
+from quantime_core.paths import run_manifest_path, run_results_dir
 from quantime_data import batches
 from quantime_data import replay as replay_mod
 from quantime_data.replay import ReplayIntegrityError, build_manifest, replay, write_manifest
@@ -175,7 +178,12 @@ def test_r2_result_sha_mismatch_is_rejected(root, run_id, commit):
         git_commit=manifest.git_commit,
         result_sha256="0" * 64,
     )
-    write_manifest(root, tampered)
+    # 带内二次 write_manifest 已被 P1-4 禁止（见 test_write_manifest_twice_is_rejected）；
+    # R2 要证的是「基准 hash 不符即拒绝」，故这里带外改文件模拟被篡改的清单。
+    (root / run_manifest_path(run_id)).write_text(
+        json.dumps(tampered.as_dict(), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ReplayIntegrityError, match="R2"):
         replay(root, run_id, _compute, columns=RESULT_COLUMNS)
 
@@ -211,3 +219,67 @@ def test_manifest_roundtrip_and_explicit_file_list(root, run_id, commit):
 def test_replay_without_manifest_raises(root):
     with pytest.raises(ReplayIntegrityError, match="无 manifest"):
         replay(root, new_run_id(), _compute, columns=RESULT_COLUMNS)
+
+
+def test_build_manifest_rejects_file_planted_before_the_run(root, run_id, commit):
+    """P1-3：提交后、建 run 清单**之前**复制出 `part-0001.parquet` → 建清单即抛错。
+
+    清单取证只认提交时固定的 `batch_manifest/<id>.json`，目录现状只用来核对。
+    未登记文件绝不会被读取列表收录。
+    """
+    b = commit()
+    planted = root / b.batch_dir / "part-0001.parquet"
+    planted.write_bytes((root / b.parts[0].path).read_bytes())
+
+    with pytest.raises(ReplayIntegrityError, match="多出未登记文件"):
+        build_manifest(root, run_id, {"kline": [b]}, config_hash="cfg-v1", git_commit="dd97896")
+
+    # 拿掉植入文件后清单可建，且读取列表只含登记的那一个文件。
+    planted.unlink()
+    manifest = build_manifest(
+        root, run_id, {"kline": [b]}, config_hash="cfg-v1", git_commit="dd97896"
+    )
+    assert manifest.files_of("kline") == [b.parts[0].path]
+
+
+def test_manifest_file_list_comes_from_commit_time_manifest_not_the_directory(root, run_id, commit):
+    """P1-3 反面：删掉提交清单后不得退化成「扫目录」，必须报错。"""
+    b = commit()
+    (root / b.manifest_path).unlink()
+    with pytest.raises(ReplayIntegrityError, match="无提交清单"):
+        build_manifest(root, run_id, {"kline": [b]}, config_hash="cfg-v1", git_commit="dd97896")
+
+
+def test_write_manifest_twice_is_rejected_and_bytes_are_unchanged(root, run_id, commit):
+    """P1-4：同 run_id 二次 `write_manifest` 抛错，且原清单逐字节不变。"""
+    b = commit()
+    manifest, _ = _make_run(root, run_id, [b])
+    path = root / run_manifest_path(run_id)
+    before = path.read_bytes()
+
+    tampered = replay_mod.Manifest(
+        run_id=manifest.run_id,
+        tables=manifest.tables,
+        config_hash="cfg-v2",
+        git_commit=manifest.git_commit,
+        result_sha256="0" * 64,
+    )
+    with pytest.raises(ReplayIntegrityError, match="已发布，拒绝覆盖"):
+        write_manifest(root, tampered)
+    assert path.read_bytes() == before
+
+
+def test_write_result_twice_is_rejected_and_bytes_are_unchanged(root, run_id, commit):
+    """P1-4：重放结果文件同样不可覆盖。"""
+    b = commit()
+    manifest, first = _make_run(root, run_id, [b])
+    target = root / run_results_dir(run_id) / "result.parquet"
+    before = target.read_bytes()
+
+    other = pa.table({"symbol": pa.array(["ZZZ"]), "total": pa.array([0.0])})
+    with pytest.raises(ReplayIntegrityError, match="已发布，拒绝覆盖"):
+        replay_mod.write_result(root, run_id, other, columns=RESULT_COLUMNS)
+    assert target.read_bytes() == before
+    # 首跑基准仍然成立。
+    assert replay(root, run_id, _compute, columns=RESULT_COLUMNS).equals(first)
+    assert manifest.result_sha256 == parquet_io.file_sha256(target)
