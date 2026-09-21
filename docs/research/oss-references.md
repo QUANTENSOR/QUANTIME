@@ -1,9 +1,12 @@
 # 各一级模块可参考的开源项目：业务逻辑参考与许可证审查（QNT-25）
 
-- 调研日期：2026-09-20；基线 `main` @ `d4b447e`
+- 调研日期：2026-09-20；**数据重采日期：2026-09-21**（凭据来源整改，见下"采集认证口径与 provenance"）；基线 `main` @ `d4b447e`
 - **本文只做"业务逻辑参考"的可行性判定与许可证审查，不引入任何依赖、不建议任何代码复制。**是否引入某个库作为依赖由各落地卡（QNT-27～QNT-33）在 ADR 中单独裁决。
-- 事实采集脚本：`docs/research/probes/oss_probe.py`（37 个仓库；GitHub REST + PyPI JSON；**stdlib `urllib` 匿名 HTTP，无第三方依赖、不依赖 `gh` CLI**；`python docs/research/probes/oss_probe.py > results.json` 一键复现），本次结果 git 追踪于 `docs/research/probes/oss-results.json`（`probed_at=2026-09-20T05:58:39Z`）
-- **采集认证口径**：脚本默认走**匿名**路径。匿名配额 60 req/h，37 仓库需 ~110 次请求，实测匿名跑会在第 ~20 个仓库耗尽配额（脚本按 `X-RateLimit-Remaining=0` 识别为 **rate-limit**、逐条打印并以非 0 退出，**不会把失败写成"仓库不存在"**）。因此**本次落盘数据是带 token 跑的**：token 仅经环境变量 `GITHUB_TOKEN` 传入（读取时 `.strip()`，脚本内无任何默认值、无 `op://` 字面量、不落盘），运行模式记录在结果 JSON 的 `auth_mode` 字段——本次为 **`token(GITHUB_TOKEN)`**。
+- 事实采集脚本：`docs/research/probes/oss_probe.py`（37 个仓库；GitHub REST + PyPI JSON；**stdlib `urllib`，无第三方依赖、不依赖 `gh` CLI**；运行入口 `scripts/run_probe.sh`（凭据失败即 exit 1，不回落本机凭据）；`python docs/research/probes/oss_probe.py > results.json` 一键复现），本次结果 git 追踪于 `docs/research/probes/oss-results.json`（`probed_at=2026-09-21T05:04:05Z`）
+- **采集认证口径与 provenance（2026-09-21 整改）**：脚本默认走**匿名**路径；匿名配额 60 req/h，37 仓库需 ~110 次请求，实测会在第 ~20 个仓库耗尽（脚本按 `X-RateLimit-Remaining=0` 识别为 rate-limit、逐条打印并以非 0 退出，**不会把失败写成"仓库不存在"**）。因此本版数据由 **1Password 注入的只读 PAT** 采集：
+  - **凭据来源**：`op run --env-file=docs/research/probes/probe.env.tpl`，模板内仅含引用 `"op://quant-dev/GitHub - PAT/credential"`（item 名含空格，引用须加引号），读入后 `.strip()` 注入为 `GITHUB_TOKEN`。**凭据值不打印、不写文件、不入 JSON**；仓库内只有 `*.tpl` 与本文出现 `op://` 引用字面量。`op read` 失败即 exit 1 报"凭据不可用"，**不回落任何本机凭据路径**（禁用 `gh auth token` / `gh api` / `~/.netrc`）。
+  - **本版数据**：`probed_at=2026-09-21T05:04:05Z`，37/37 采集成功、`failures=[]`，`auth_mode=token(op://quant-dev/GitHub - PAT)`。
+  - **历史说明（保留，不得抹去）**：第一版数据（commit `7dbd996`–`5843a84`，`probed_at` 2026-09-20T04:28:49Z / 05:58:39Z）由**本机 `gh auth token` 采集**，凭据来源不符合 AGENTS.md「凭据只来自 vault 经 op 注入」条款，经 verify-b 两次 REJECT、owner 2026-09-21 裁决后**整体弃用**；`oss-results.json` 已被本次重采结果**整体替换**，不保留旧文件任何一行。弃用原因是**凭据来源不合规**，与数据数值本身是否准确无关。
 - 校验脚本：`docs/research/probes/test_oss_probe.py`（19 项失败分类自检，离线）、`docs/research/probes/check_doc_consistency.py`（事实表 37 行 ↔ JSON 一致性，离线）
 - **活跃度口径**：`commits_1y` = `GET /repos/{r}/commits?since=<今日-365d>` 分页计数（默认分支）；`pushed_at` / `latest_release` 取仓库与 `releases/latest`。计数含 merge commit，跨仓库不可直接比大小，只用于判断"是否仍在维护"。
 - **许可证口径**：SPDX 取 GitHub License API `license.spdx_id`；返回 `NOASSERTION` 的四个仓库（OpenBB / vectorbt / MinerU / Zotero）已逐个读取许可证正文，结论见 §7。**SPDX 字段不是法律意见**；§7 标红项在后续卡中不得引入其代码。
@@ -25,47 +28,47 @@
 
 ## 1. 全量事实表（37 个候选，按模块分组）
 
-下表所有数值来自 `probes/oss-results.json`，`probed_at=2026-09-20T05:58:39Z`。`c1y` = 近一年提交数（口径见文首）。**"3.14"列**（口径经 verify-b 2026-09-20 复审后收紧）：`Y` = PyPI classifier 含 3.14 **或**已发 cp314 wheel；`未标注` = **无 3.14 classifier / 无 cp314 wheel，兼容性未验证**——注意这**不等于"不支持"**，若其 `requires_python` 无上界且有 sdist，3.14 下仍可能正常安装，只是上游未声明、本文未实测；`N` = 有确凿证据无法在 3.14 安装（目前仅 qlib：无 sdist 且 wheel 止于 cp312，见 §4.1）；`未实测` = 未走 PyPI 分发或本文未采集；`—` = 非 Python 包。**本列不得单独作为"排除某库"的理由**。
+下表所有数值来自 `probes/oss-results.json`，`probed_at=2026-09-21T05:04:05Z`。`c1y` = 近一年提交数（口径见文首）。**"3.14"列**（口径经 verify-b 2026-09-20 复审后收紧）：`Y` = PyPI classifier 含 3.14 **或**已发 cp314 wheel；`未标注` = **无 3.14 classifier / 无 cp314 wheel，兼容性未验证**——注意这**不等于"不支持"**，若其 `requires_python` 无上界且有 sdist，3.14 下仍可能正常安装，只是上游未声明、本文未实测；`N` = 有确凿证据无法在 3.14 安装（目前仅 qlib：无 sdist 且 wheel 止于 cp312，见 §4.1）；`未实测` = 未走 PyPI 分发或本文未采集；`—` = 非 Python 包。**本列不得单独作为"排除某库"的理由**。
 
 | 模块 | 仓库 | SPDX | c1y | 最后 push | 最新 release | 3.14 |
 |---|---|---|---|---|---|---|
-| 行情看板 | [tradingview/lightweight-charts](https://github.com/tradingview/lightweight-charts) | Apache-2.0 | 328 | 2026-09-18 | v5.2.1 (2026-08-12) | — |
-| 行情看板 | [klinecharts/KLineChart](https://github.com/klinecharts/KLineChart) | Apache-2.0 | 250 | 2026-09-18 | v10.0.3 (2026-08-27) | — |
-| 行情看板 | [perspective-dev/perspective](https://github.com/perspective-dev/perspective) | Apache-2.0 | 325 | 2026-09-18 | v5.5.1 (2026-09-18) | — |
-| 行情看板 | [freqtrade/frequi](https://github.com/freqtrade/frequi) | **GPL-3.0** | 1372 | 2026-09-17 | 3.1.2 (2026-08-30) | — |
-| 数据中心 | [dlt-hub/dlt](https://github.com/dlt-hub/dlt) | Apache-2.0 | 615 | 2026-09-18 | 1.30.0 (2026-08-11) | Y |
-| 数据中心 | [ccxt/ccxt](https://github.com/ccxt/ccxt) | MIT | 9947 | 2026-09-19 | v4.5.81 (2026-09-19) | Y |
-| 数据中心 | [gerrymanoim/exchange_calendars](https://github.com/gerrymanoim/exchange_calendars) | Apache-2.0 | 72 | 2026-09-15 | 4.13.2 (2026-03-10) | Y |
-| 数据中心 | [OpenBB-finance/OpenBB](https://github.com/OpenBB-finance/OpenBB) | **AGPL-3.0**(§7.1) | 138 | 2026-09-19 | ODP (2026-04-25) | — |
-| 数据中心 | [databento/databento-python](https://github.com/databento/databento-python) | Apache-2.0 | 152 | 2026-09-17 | v0.86.0 (2026-09-01) | Y |
-| 数据中心 | [ranaroussi/yfinance](https://github.com/ranaroussi/yfinance) | Apache-2.0 | 318 | 2026-09-17 | 1.7.0 (2026-08-26) | 未标注 |
-| 研报资料 | [docling-project/docling](https://github.com/docling-project/docling) | MIT | 790 | 2026-09-18 | v2.129.0 (2026-09-18) | 未实测 |
-| 研报资料 | [Unstructured-IO/unstructured](https://github.com/Unstructured-IO/unstructured) | Apache-2.0 | 155 | 2026-09-19 | 0.27.6 (2026-09-14) | 未实测 |
-| 研报资料 | [opendatalab/MinerU](https://github.com/opendatalab/MinerU) | Apache-2.0+附加(§7.2) | 2882 | 2026-09-19 | mineru-4.0.4-released (2026-09-19) | 未实测 |
+| 行情看板 | [tradingview/lightweight-charts](https://github.com/tradingview/lightweight-charts) | Apache-2.0 | 328 | 2026-09-18 |  v5.2.1 (2026-08-12) | — |
+| 行情看板 | [klinecharts/KLineChart](https://github.com/klinecharts/KLineChart) | Apache-2.0 | 250 | 2026-09-18 |  v10.0.3 (2026-08-27) | — |
+| 行情看板 | [perspective-dev/perspective](https://github.com/perspective-dev/perspective) | Apache-2.0 | 325 | 2026-09-18 |  v5.5.1 (2026-09-18) | — |
+| 行情看板 | [freqtrade/frequi](https://github.com/freqtrade/frequi) | **GPL-3.0** | 1372 | 2026-09-17 |  3.1.2 (2026-08-30) | — |
+| 数据中心 | [dlt-hub/dlt](https://github.com/dlt-hub/dlt) | Apache-2.0 | 613 | 2026-09-18 |  1.30.0 (2026-08-11) | Y |
+| 数据中心 | [ccxt/ccxt](https://github.com/ccxt/ccxt) | MIT | 9974 |  2026-09-20 |  v4.5.81 (2026-09-19) | Y |
+| 数据中心 | [gerrymanoim/exchange_calendars](https://github.com/gerrymanoim/exchange_calendars) | Apache-2.0 | 72 | 2026-09-15 |  4.13.2 (2026-03-10) | Y |
+| 数据中心 | [OpenBB-finance/OpenBB](https://github.com/OpenBB-finance/OpenBB) | **AGPL-3.0**(§7.1) | 138 | 2026-09-19 |  ODP (2026-04-25) | — |
+| 数据中心 | [databento/databento-python](https://github.com/databento/databento-python) | Apache-2.0 | 152 | 2026-09-17 |  v0.86.0 (2026-09-01) | Y |
+| 数据中心 | [ranaroussi/yfinance](https://github.com/ranaroussi/yfinance) | Apache-2.0 | 318 | 2026-09-17 |  1.7.0 (2026-08-26) | 未标注 |
+| 研报资料 | [docling-project/docling](https://github.com/docling-project/docling) | MIT | 790 |  2026-09-20 |  v2.129.0 (2026-09-18) | 未实测 |
+| 研报资料 | [Unstructured-IO/unstructured](https://github.com/Unstructured-IO/unstructured) | Apache-2.0 | 155 |  2026-09-21 |  0.27.6 (2026-09-14) | 未实测 |
+| 研报资料 | [opendatalab/MinerU](https://github.com/opendatalab/MinerU) | Apache-2.0+附加(§7.2) | 2871 |  2026-09-20 |  mineru-4.0.5-released (2026-09-20) | 未实测 |
 | 研报资料 | [zotero/zotero](https://github.com/zotero/zotero) | **AGPL-3.0**(§7.1) | 992 | 2026-09-17 | — | — |
-| 研报资料 | [paperless-ngx/paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) | **GPL-3.0** | 1673 | 2026-09-20 | v3.2.0 (2026-09-19) | — |
-| 研报资料 | [chroma-core/chroma](https://github.com/chroma-core/chroma) | Apache-2.0 | 1237 | 2026-09-18 | 1.5.9 (2026-05-05) | 未实测 |
-| 因子宫殿 | [microsoft/qlib](https://github.com/microsoft/qlib) | MIT | 27 | 2026-09-17 | v0.9.7 (2025-08-15) | **N**(§4.1) |
-| 因子宫殿 | [stefan-jansen/alphalens-reloaded](https://github.com/stefan-jansen/alphalens-reloaded) | Apache-2.0 | **0** | 2025-12-15 | 0.4.5 (2025-07-23) | 未标注 |
-| 因子宫殿 | [TA-Lib/ta-lib-python](https://github.com/TA-Lib/ta-lib-python) | BSD-2-Clause | 44 | 2026-09-15 | v0.8.0 (2026-09-13) | Y |
-| 因子宫殿 | [xgboosted/pandas-ta-classic](https://github.com/xgboosted/pandas-ta-classic) | MIT | 659 | 2026-09-16 | 0.8.32 (2026-09-14) | Y |
+| 研报资料 | [paperless-ngx/paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) | **GPL-3.0** | 1676 |  2026-09-21 |  v3.2.1 (2026-09-20) | — |
+| 研报资料 | [chroma-core/chroma](https://github.com/chroma-core/chroma) | Apache-2.0 | 1237 | 2026-09-18 |  1.5.9 (2026-05-05) | 未实测 |
+| 因子宫殿 | [microsoft/qlib](https://github.com/microsoft/qlib) | MIT | 27 | 2026-09-17 |  v0.9.7 (2025-08-15) | **N**(§4.1) |
+| 因子宫殿 | [stefan-jansen/alphalens-reloaded](https://github.com/stefan-jansen/alphalens-reloaded) | Apache-2.0 | **0** | 2025-12-15 |  0.4.5 (2025-07-23) | 未标注 |
+| 因子宫殿 | [TA-Lib/ta-lib-python](https://github.com/TA-Lib/ta-lib-python) | BSD-2-Clause | 44 |  2026-09-21 |  v0.8.0 (2026-09-13) | Y |
+| 因子宫殿 | [xgboosted/pandas-ta-classic](https://github.com/xgboosted/pandas-ta-classic) | MIT | 659 | 2026-09-16 |  0.8.32 (2026-09-14) | Y |
 | 因子宫殿 | [bukosabino/ta](https://github.com/bukosabino/ta) | MIT | **1** | 2026-03-18 | — | 未标注 |
-| 策略工厂 | [polakowo/vectorbt](https://github.com/polakowo/vectorbt) | Apache-2.0+CC(§7.2) | 149 | 2026-09-17 | v1.1.0 (2026-07-05) | Y |
-| 策略工厂 | [pmorissette/bt](https://github.com/pmorissette/bt) | MIT | 181 | 2026-09-18 | v1.2.3 (2026-09-11) | Y(wheel) |
-| 策略工厂 | [stefan-jansen/zipline-reloaded](https://github.com/stefan-jansen/zipline-reloaded) | Apache-2.0 | **4** | 2026-01-06 | 3.1.1 (2025-07-23) | 未标注 |
-| 策略工厂 | [QuantConnect/Lean](https://github.com/QuantConnect/Lean) | Apache-2.0 | 429 | 2026-09-18 | v2.4.0.1 (2017-08-08) | — (C#) |
+| 策略工厂 | [polakowo/vectorbt](https://github.com/polakowo/vectorbt) | Apache-2.0+CC(§7.2) | 149 | 2026-09-17 |  v1.1.0 (2026-07-05) | Y |
+| 策略工厂 | [pmorissette/bt](https://github.com/pmorissette/bt) | MIT | 191 |  2026-09-20 |  v1.2.3 (2026-09-11) | Y(wheel) |
+| 策略工厂 | [stefan-jansen/zipline-reloaded](https://github.com/stefan-jansen/zipline-reloaded) | Apache-2.0 | **4** | 2026-01-06 |  3.1.1 (2025-07-23) | 未标注 |
+| 策略工厂 | [QuantConnect/Lean](https://github.com/QuantConnect/Lean) | Apache-2.0 | 429 | 2026-09-18 |  v2.4.0.1 (2017-08-08) | — (C#) |
 | 策略工厂 | [kernc/backtesting.py](https://github.com/kernc/backtesting.py) | **AGPL-3.0** | 33 | 2026-08-05 | — | 未标注 |
-| 策略工厂 | [nautechsystems/nautilus_trader](https://github.com/nautechsystems/nautilus_trader) | **LGPL-3.0** | 5465 | 2026-09-20 | v1.231.0 (2026-08-02) | Y |
-| 策略工厂 | [PyPortfolio/PyPortfolioOpt](https://github.com/PyPortfolio/PyPortfolioOpt) | MIT | 41 | 2026-07-07 | v1.6.0 (2026-02-26) | Y |
+| 策略工厂 | [nautechsystems/nautilus_trader](https://github.com/nautechsystems/nautilus_trader) | **LGPL-3.0** | 5462 |  2026-09-21 |  v1.231.0 (2026-08-02) | Y |
+| 策略工厂 | [PyPortfolio/PyPortfolioOpt](https://github.com/PyPortfolio/PyPortfolioOpt) | MIT | 41 | 2026-07-07 |  v1.6.0 (2026-02-26) | Y |
 | 策略工厂 | [dcajasn/Riskfolio-Lib](https://github.com/dcajasn/Riskfolio-Lib) | BSD-3-Clause | 36 | 2026-08-18 | — | Y |
-| 策略工厂 | [skfolio/skfolio](https://github.com/skfolio/skfolio) | BSD-3-Clause | 197 | 2026-09-19 | v1.2.9 (2026-09-19) | Y |
-| 策略工厂 | [ranaroussi/quantstats](https://github.com/ranaroussi/quantstats) | Apache-2.0 | 13 | 2026-07-20 | v0.0.81 (2026-01-13) | 未标注 |
-| paper 交易 | [alpacahq/alpaca-py](https://github.com/alpacahq/alpaca-py) | Apache-2.0 | 65 | 2026-09-18 | v0.44.0 (2026-08-11) | Y |
-| paper 交易 | [hummingbot/hummingbot](https://github.com/hummingbot/hummingbot) | Apache-2.0 | 1703 | 2026-09-18 | v2.16.0 (2026-07-29) | 未实测 |
-| paper 交易 | [freqtrade/freqtrade](https://github.com/freqtrade/freqtrade) | **GPL-3.0** | 3273 | 2026-09-19 | 2026.8 (2026-08-31) | — |
+| 策略工厂 | [skfolio/skfolio](https://github.com/skfolio/skfolio) | BSD-3-Clause | 201 |  2026-09-20 |  v1.3.0 (2026-09-20) | Y |
+| 策略工厂 | [ranaroussi/quantstats](https://github.com/ranaroussi/quantstats) | Apache-2.0 | 13 | 2026-07-20 |  v0.0.81 (2026-01-13) | 未标注 |
+| paper 交易 | [alpacahq/alpaca-py](https://github.com/alpacahq/alpaca-py) | Apache-2.0 | 65 | 2026-09-18 |  v0.44.0 (2026-08-11) | Y |
+| paper 交易 | [hummingbot/hummingbot](https://github.com/hummingbot/hummingbot) | Apache-2.0 | 1703 |  2026-09-20 |  v2.16.0 (2026-07-29) | 未实测 |
+| paper 交易 | [freqtrade/freqtrade](https://github.com/freqtrade/freqtrade) | **GPL-3.0** | 3290 |  2026-09-21 |  2026.8 (2026-08-31) | — |
 | paper 交易 | [jesse-ai/jesse](https://github.com/jesse-ai/jesse) | MIT | 445 | 2026-09-17 | — | 未实测 |
-| paper 交易 | [ib-api-reloaded/ib_async](https://github.com/ib-api-reloaded/ib_async) | BSD-2-Clause | 10 | 2026-08-19 | v2.0.1 (2025-06-22) | 未实测 |
-| 跨模块 | [stefan-jansen/machine-learning-for-trading](https://github.com/stefan-jansen/machine-learning-for-trading) | MIT | 743 | 2026-09-20 | v3.0.0-artifacts (2026-07-24) | — |
+| paper 交易 | [ib-api-reloaded/ib_async](https://github.com/ib-api-reloaded/ib_async) | BSD-2-Clause | 10 | 2026-08-19 |  v2.0.1 (2025-06-22) | 未实测 |
+| 跨模块 | [stefan-jansen/machine-learning-for-trading](https://github.com/stefan-jansen/machine-learning-for-trading) | MIT | 751 |  2026-09-21 |  v3.1.0-artifacts (2026-09-20) | — |
 
 ## 2. 行情看板
 
@@ -92,13 +95,13 @@
 ## 3. 数据中心
 
 ### 3.1 dlt-hub/dlt — Apache-2.0
-- 仓库 <https://github.com/dlt-hub/dlt>；c1y=615，1.30.0 (2026-08-11)；PyPI `dlt` 1.30.0 `requires_python=<3.15,>=3.10`（含 3.14 classifier）。
+- 仓库 <https://github.com/dlt-hub/dlt>；c1y=613，1.30.0 (2026-08-11)；PyPI `dlt` 1.30.0 `requires_python=<3.15,>=3.10`（含 3.14 classifier）。
 - **可借鉴的具体业务逻辑（与 ADR-0002 直接对应）**：① **`_dlt_load_id` / `_dlt_loads` 血缘表**——每行带 load_id、并建立 `{table}._dlt_load_id` → `_dlt_loads.load_id` 的引用（见 `dlt/common/schema/utils.py` 中 `"Create a Reference between {table}._dlt_load_id and _dlt_loads.load_id"`），**这正是 ADR-0002 D2.7 `ingestion_batch` 想要的形状**，可直接参考其"批次表 + 每行外键"的建模；② `dlt/extract/incremental/` 的增量游标与 `lag` 处理，对应我们"供应商回补"场景；③ `write_disposition` 中 `append` 语义与 D2.1 只 insert 一致。
 - **技术栈契合**：`dlt/destinations/impl/` 内置 `duckdb`、`ducklake`、`filesystem` 三个与我们直接相关的目标端 → DuckDB+Parquet 路径是它的一等公民。
 - **不可照搬的原因**：它是完整 ELT 框架，自带 schema 演进与状态存储，与 ADR-0002"只 insert、批次封闭水位"的严格语义未必一致（D2.7 未决项见 ADR-0002 文末）→ **参考血缘建模，不建议整体引入**。
 
 ### 3.2 ccxt/ccxt — MIT
-- 仓库 <https://github.com/ccxt/ccxt>；c1y=9947（全仓库含自动生成，跨语言），v4.5.81 (2026-09-19)；PyPI `ccxt` 4.5.81 含 3.14 classifier。
+- 仓库 <https://github.com/ccxt/ccxt>；c1y=9974（全仓库含自动生成，跨语言），v4.5.81 (2026-09-19)；PyPI `ccxt` 4.5.81 含 3.14 classifier。
 - **可借鉴的具体业务逻辑**：① `fetch_ohlcv(symbol, timeframe, since, limit)` 的**统一分页契约**（`python/ccxt/binance.py:4961`）——用 `since` 前向翻页而非页码，天然适合"按时间窗补齐 + 幂等重拉"，是我们 Binance 日线摄取的游标语义参考；② **`set_sandbox_mode(enabled)`**（`python/ccxt/base/exchange.py:3463`）把 testnet URL 切换收敛到一个开关，且当交易所无 sandbox URL 时**抛 `NotSupported` 而不是静默回落主网**——这与 ADR-0001 D1.7 的 fail-closed 要求同向，值得照此实现我们的 allowlist 断言。
 - **不可照搬的原因**：Python 版由 TS 转译生成，代码风格与类型标注不适合手工改；且其统一层会**掩盖**交易所间的语义差异（如 Binance demo 与主网公共行情同源），而 ADR-0001 未决项正要求公共只读与签名交易通道分开 → 只参考契约形状。
 
@@ -138,7 +141,7 @@
 - ⚠️ **许可证不是纯 Apache-2.0**：Apache-2.0 **+ Commons Clause**（详见 §7.2）。内部研究用途不受限；**若未来商业化，需 owner 裁决**。**作为"对拍参照物"只需其输出数字，风险面最小**；即便如此仍建议 QNT-30 在 ADR 中显式记录该条款。
 
 ### 5.2 对拍**备选**：pmorissette/bt v1.2.3
-- 仓库 <https://github.com/pmorissette/bt>；c1y=181，v1.2.3 (2026-09-11)；**MIT**（许可最干净）。PyPI `bt` 1.2.3 `requires_python>=3.9`，**wheel 含 cp314** ✅（classifier 尚未更新到 3.14，但已发 cp314 wheel → 判为可用，**未实测**）。
+- 仓库 <https://github.com/pmorissette/bt>；c1y=191，v1.2.3 (2026-09-11)；**MIT**（许可最干净）。PyPI `bt` 1.2.3 `requires_python>=3.9`，**wheel 含 cp314** ✅（classifier 尚未更新到 3.14，但已发 cp314 wheel → 判为可用，**未实测**）。
 - **选它作备选的理由**：① **MIT 无附加条款**，若 §7.2 的 Commons Clause 在商业化裁决中成为障碍，可无缝顶替首选；② 其 `bt/algos.py` 的 **Algo/AlgoStack 组合范式**（`SelectAll` → `WeighEqually` → `Rebalance` 逐级流水线）是与 vectorbt **完全不同的建模路径**——两者思路差异越大，对拍越能暴露我方引擎的隐含假设；③ 内置再平衡语义，正好覆盖组合层对拍。
 - **可借鉴的具体业务逻辑**：`bt/core.py` 的 `Node/StrategyBase/SecurityBase` 树形组合结构——把"组合 → 子策略 → 标的"建成树并逐级下发权重，是我们做多策略组合时的分层参考。
 - **相对首选的劣势**：面向"权重/再平衡"而非"逐笔信号"，**逐笔成交语义（滑点/部分成交）不如 vectorbt 直接**，因此定为备选而非首选。
@@ -163,7 +166,7 @@
 |---|---|---|---|---|
 | [PyPortfolioOpt](https://github.com/PyPortfolio/PyPortfolioOpt) | MIT | 41 | ✅(cls) | `pypfopt/` 下 `expected_returns.py` / `risk_models.py` / `objective_functions.py` / `efficient_frontier/` / `black_litterman.py` / `hierarchical_portfolio.py` / `discrete_allocation.py` —— **把"预期收益估计""风险矩阵估计""目标函数"三者解耦**是最值得照搬的分层；`discrete_allocation.py` 的"连续权重 → 整数股数"离散化是实盘/paper 落地必需的一步，常被忽略 |
 | [Riskfolio-Lib](https://github.com/dcajasn/Riskfolio-Lib) | BSD-3-Clause | 36 | ✅(cp314 wheel) | 风险度量谱系最全（CVaR/CDaR 等下行风险），可作为 QNT-30 组合优化的**风险指标定义参照** |
-| [skfolio](https://github.com/skfolio/skfolio) | BSD-3-Clause | 197 | ✅ | **活跃度最高**（v1.2.9, 2026-09-19）。`src/skfolio/` 下 `optimization` / `moments` / `prior` / `uncertainty_set` / `model_selection` / `pre_selection` —— 采用 **scikit-learn estimator 接口**，`model_selection` 提供组合层的 **walk-forward / 交叉验证**，这是三者中唯一直面"回测期与调参期分离"的，**对防前视泄漏最有参考价值** |
+| [skfolio](https://github.com/skfolio/skfolio) | BSD-3-Clause | 201 | ✅ | **活跃度最高**（v1.3.0, 2026-09-20）。`src/skfolio/` 下 `optimization` / `moments` / `prior` / `uncertainty_set` / `model_selection` / `pre_selection` —— 采用 **scikit-learn estimator 接口**，`model_selection` 提供组合层的 **walk-forward / 交叉验证**，这是三者中唯一直面"回测期与调参期分离"的，**对防前视泄漏最有参考价值** |
 
 ### 5.5 绩效报告：ranaroussi/quantstats（Apache-2.0，**已显老**）
 - 仓库 <https://github.com/ranaroussi/quantstats>；c1y=13，v0.0.81 (2026-01-13)；PyPI 0.0.81 `requires_python=">=3.10"`（**无上界**），classifier 止于 3.13，py3 纯 wheel → **无 3.14 声明，兼容性未验证**。
@@ -188,7 +191,7 @@
 - **不可照搬的原因**：Cython（`.pyx`）+ 面向做市高频，与我们日线级别研究定位相差较远 → 只取分层语义。
 
 ### 6.3 freqtrade/freqtrade — GPL-3.0 ⚠️（只可参考思路，见 §7.1）
-- 仓库 <https://github.com/freqtrade/freqtrade>；c1y=3273，2026.8 (2026-08-31)。**活跃度最高的可读参考。**
+- 仓库 <https://github.com/freqtrade/freqtrade>；c1y=3290，2026.8 (2026-08-31)。**活跃度最高的可读参考。**
 - **可借鉴的具体业务逻辑（思路层面，不可复制代码）**：① `freqtrade/optimize/analysis/` 下 **`lookahead.py` + `recursive.py`** —— 用"逐步截断历史重跑并比对信号"的方式**自动化检测前视偏差与递归依赖**。这是极少数公开实现的工程化前视检测，**QNT-30 应实现同类自检**；② `optimize/backtesting.py` 的退出优先级建模——`_get_close_rate_for_stoploss` / `_get_close_rate_for_roi` 分开计算止损与止盈成交价（`:597` / `:651`），解决"同一根 K 线内止损与止盈都触发时按哪个成交"这一日线回测核心歧义；③ `data/history/datahandlers/` 的 **`parquetdatahandler.py` / `featherdatahandler.py` / `arrowdatahandler.py` / `jsondatahandler.py` 多格式可插拔**（`idatahandler.py` 定义接口）——与我们 Parquet 基线同向。
 - ⚠️ **GPL-3.0：以上仅可作为设计思路，后续卡不得引入其代码。**
 
@@ -208,7 +211,7 @@
 | [OpenBB-finance/OpenBB](https://github.com/OpenBB-finance/OpenBB) | **AGPL-3.0**（GitHub 显示 `NOASSERTION`，`LICENSE` 正文第 3 行写明 "All files in this repository are licensed under the GNU Affero General Public License v3.0"） | 同上 | §3.4 仅读**两层 provider 结构**的设计 |
 | [zotero/zotero](https://github.com/zotero/zotero) | **AGPL-3.0**（GitHub 显示 `NOASSERTION`，`COPYING` 写明 AGPLv3） | 同上 | §8 仅读条目/附件**数据模型思路** |
 | [paperless-ngx/paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) | **GPL-3.0** | 衍生作品须同样 GPL 开源 | §8 仅读文档入库/标签/全文检索的**产品语义** |
-| [nautechsystems/nautilus_trader](https://github.com/nautechsystems/nautilus_trader) | **LGPL-3.0** | 弱传染：动态链接/未修改使用通常不传染，**但修改其源码则须以 LGPL 发布**；且本项目为 Rust+Python 混合，"链接"边界不清晰 | 仅登记：`crates/` 下 `backtest` / `execution` / `portfolio` / `risk` / `analysis` 的**模块切分**（c1y=5465，活跃度第一；PyPI `requires_python=<3.15,>=3.12` 且有 cp314 wheel）可作分层参考。**因 LGPL 边界判定成本高，本文不建议在 QNT-30 引入** |
+| [nautechsystems/nautilus_trader](https://github.com/nautechsystems/nautilus_trader) | **LGPL-3.0** | 弱传染：动态链接/未修改使用通常不传染，**但修改其源码则须以 LGPL 发布**；且本项目为 Rust+Python 混合，"链接"边界不清晰 | 仅登记：`crates/` 下 `backtest` / `execution` / `portfolio` / `risk` / `analysis` 的**模块切分**（c1y=5462，活跃度第一；PyPI `requires_python=<3.15,>=3.12` 且有 cp314 wheel）可作分层参考。**因 LGPL 边界判定成本高，本文不建议在 QNT-30 引入** |
 
 > **对后续卡的硬性约束**：以上 7 个仓库的**代码**一律不得复制、改写或移植进 quantime。只允许阅读后用自己的实现表达同一业务语义。
 
@@ -231,7 +234,7 @@ lightweight-charts、KLineChart、perspective、dlt、ccxt、exchange_calendars�
 - **zotero/zotero** <https://github.com/zotero/zotero>（**AGPL-3.0**，§7.1）：仅参考**思路**——条目（item）/ 附件（attachment）/ 标签 / 集合的数据模型，以及"同一文献多份附件与多处注释"的建模方式，正对应我们"一份研报 + 多个版本 + 多处摘录"。
 - **paperless-ngx** <https://github.com/paperless-ngx/paperless-ngx>（**GPL-3.0**，§7.1）：仅参考**产品语义**——文档入库、标签体系、全文检索的组织方式。
 - **chroma-core/chroma** <https://github.com/chroma-core/chroma>（Apache-2.0，c1y=1237）：若 QNT-32 需要向量检索则登记为候选；**本阶段不建议引入**——研报检索是否需要向量化尚未裁决，且 DuckDB 已有全文检索扩展可先行评估。
-- **跨模块**：[stefan-jansen/machine-learning-for-trading](https://github.com/stefan-jansen/machine-learning-for-trading)（MIT，c1y=743）——书籍配套代码，**不是库**，但其 `data → factor → strategy → backtest` 的章节组织可作为 QNT-29/QNT-30 的**内容 checklist**。
+- **跨模块**：[stefan-jansen/machine-learning-for-trading](https://github.com/stefan-jansen/machine-learning-for-trading)（MIT，c1y=751）——书籍配套代码，**不是库**，但其 `data → factor → strategy → backtest` 的章节组织可作为 QNT-29/QNT-30 的**内容 checklist**。
 
 ## 9. 待裁决清单（交 planner / owner）
 

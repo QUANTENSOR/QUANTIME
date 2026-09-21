@@ -7,9 +7,20 @@ Auth policy
 -----------
 The default path is ANONYMOUS. The anonymous GitHub quota is 60 req/h, which is
 not enough for 37 repos x commit pagination, so the script optionally reads a
-token from the GITHUB_TOKEN environment variable (inject it yourself, e.g. via
-`op run`; this script never resolves a secret reference and has no default
-token). The run mode is recorded in the output as `auth_mode`.
+token from the GITHUB_TOKEN environment variable. This script never resolves a
+secret reference itself, has no default token, and never falls back to a local
+credential store (no `gh auth token`, no `gh api`, no ~/.netrc, no git creds) --
+if the injected variable is absent the run is anonymous, nothing else is tried.
+
+Inject the token from 1Password only, via the committed template:
+
+    op run --env-file=docs/research/probes/probe.env.tpl -- \
+        python docs/research/probes/oss_probe.py > oss-results.json
+
+or use `scripts/run_probe.sh`, which fails closed with "凭据不可用" when the
+vault read fails. GITHUB_TOKEN_SOURCE carries a NON-SECRET provenance label
+(the op reference, not the value) into the output's `auth_mode` field; the
+secret itself is never printed, written to a file, or placed in the JSON.
 
 Failure policy
 --------------
@@ -70,12 +81,36 @@ FAILURES: list[str] = []
 
 
 def _token() -> str | None:
-    """Optional token from the environment. No default, no secret-reference resolution."""
+    """Optional token from the environment.
+
+    No default, no secret-reference resolution, and deliberately no fallback to
+    any local credential store: the only accepted source is an already-injected
+    GITHUB_TOKEN (see the module docstring for the op run invocation).
+    """
     raw = os.environ.get("GITHUB_TOKEN")
     if raw is None:
         return None
     tok = raw.strip()
     return tok or None
+
+
+def _token_source() -> str:
+    """Non-secret provenance label for the injected token.
+
+    Set by the env template to the op reference (a pointer, never the value).
+    Kept out of this file so the repository holds the reference literal only in
+    `*.tpl` and documentation.
+
+    The template stores the label with a single-colon `op:` prefix because
+    `op run` would otherwise try to resolve a full `op://...` value as a secret
+    and abort; it is normalised back to `op://` here purely for display.
+    """
+    src = (os.environ.get("GITHUB_TOKEN_SOURCE") or "").strip()
+    if not src:
+        return "unspecified-source"
+    if src.startswith("op:") and not src.startswith("op://"):
+        src = "op://" + src[len("op:"):]
+    return src
 
 
 def _request(url: str, token: str | None) -> tuple[object, object]:
@@ -268,7 +303,7 @@ PYPI_FOR_REPO = {
 
 def main() -> int:
     token = _token()
-    auth_mode = "token(GITHUB_TOKEN)" if token else "anonymous"
+    auth_mode = f"token({_token_source()})" if token else "anonymous"
     print(f"auth_mode={auth_mode}  since={SINCE}  repos={len(REPOS)}", file=sys.stderr)
     if not token:
         print("  note: anonymous GitHub quota is 60 req/h; this probe needs more. "
