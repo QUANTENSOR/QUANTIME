@@ -1,0 +1,46 @@
+# synthetic: true —— 本目录只放合成数据与生成脚本（AGENTS.md §2）
+# ADR-0003 §5.1 固定 20 因子清单。expr 字段为 ADR 原文照录，QNT-29 按此实现，不许替换。
+# 本卡（QNT-27）只落地清单，不实现 DSL 求值。
+version: 1
+source: docs/adr/ADR-0003-system-architecture.md §5.1
+factors:
+  - name: ret_1
+    expr: ret_1
+  - name: ret_5
+    expr: ret_5
+  - name: ret_20
+    expr: ret_20
+  - name: ma_5_close
+    expr: ma_5/close-1
+  - name: ma_20_close
+    expr: ma_20/close-1
+  - name: ma_60_close
+    expr: ma_60/close-1
+  - name: std_20_ret_1
+    expr: std_20(ret_1)
+  - name: std_60_ret_1
+    expr: std_60(ret_1)
+  - name: max_20_high_close
+    expr: max_20(high)/close-1
+  - name: min_20_low_close
+    expr: min_20(low)/close-1
+  - name: rsi_14
+    expr: rsi_14
+  - name: ts_rank_20_close
+    expr: ts_rank_20(close)
+  - name: corr_20_close_volume
+    expr: corr_20(close, volume)
+  - name: skew_20_ret_1
+    expr: skew_20(ret_1)
+  - name: kurt_20_ret_1
+    expr: kurt_20(ret_1)
+  - name: vol_ratio_5_20
+    expr: vol_ratio_5_20
+  - name: amihud_20
+    expr: amihud_20
+  - name: macd_12_26_9
+    expr: macd_12_26_9
+  - name: bb_pos_20_2
+    expr: bb_pos_20_2
+  - name: mom_reversal_20_5
+    expr: mom_reversal_20_5

@@ -16,5 +16,14 @@ __pycache__/
 *.pyc
 .venv/
 
-# Market data (license-restricted; never commit)
-data/
+# Market data (license-restricted; never commit). Root-anchored: `data/` alone would also
+# swallow `packages/data/` (the quantime_data package).
+/data/
+
+# DuckDB view store (rebuildable from packages/data/views.py; never a source of truth)
+*.duckdb
+*.duckdb.wal
+
+# Bench fixtures are generated, never committed (ADR-0003 §5.1)
+fixtures/bench/*.parquet
+fixtures/bench/*.zip

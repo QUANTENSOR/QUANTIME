@@ -1,0 +1,24 @@
+{
+  "_note": "synthetic: true. ADR-0003 §5.1 (a) payload_sha256 —— 纯业务列 Arrow 表的确定性 Parquet 序列化 sha256，不含 ADR-0002 provenance 列。content_sha256（(b)）每次运行不同，只记录不比较，不写在这里。",
+  "generator": "fixtures/bench/bench_gen.py",
+  "params": {
+    "seed": 20260920,
+    "symbols": 1000,
+    "days": 1260,
+    "start": "2021-01-04",
+    "freq": "1d",
+    "market": "crypto",
+    "asset_class": "spot"
+  },
+  "columns": ["symbol", "ts", "open", "high", "low", "close", "volume"],
+  "row_count": 1260000,
+  "writer": {
+    "module": "quantime_core.parquet_io",
+    "version": "2.6",
+    "compression": "zstd",
+    "compression_level": 3,
+    "row_group_size": 122880,
+    "write_statistics": false
+  },
+  "payload_sha256": "0afd88eed292ef0d48df570c5a7110d3eb7f0d51b5b3fb2263b6a56059615259"
+}

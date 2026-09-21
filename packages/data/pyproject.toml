@@ -1,0 +1,22 @@
+[project]
+name = "quantime-data"
+version = "0.0.0"
+description = "quantime 数据中心：append-only 摄取写入、ingestion_batch、DuckDB 视图、重放校验"
+requires-python = ">=3.14"
+dependencies = [
+    "quantime-core",
+    "pyarrow>=21",
+    "duckdb>=1.4",
+    # DuckDB 的 TIMESTAMPTZ 列转 Python 对象时需要 pytz（views.py 读 provenance 列）。
+    "pytz>=2025.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quantime_data"]
+
+[tool.uv.sources]
+quantime-core = { workspace = true }
