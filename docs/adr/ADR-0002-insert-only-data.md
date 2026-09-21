@@ -6,7 +6,9 @@ date: 2026-09-16
 deciders: WitnessJ (pending)
 depends_on: []
 research: docs/research/market-data-sources.md（QNT-2 评论 §2）
-amended: 2026-09-17（QNT-4 §0 D2.7 ingestion_batch）
+amended:
+  - 2026-09-17（QNT-4 §0 D2.7 ingestion_batch）
+  - 2026-09-21（QNT-38 承接 ADR-0003 §4.2 校验边界）
 ---
 
 # ADR-0002 数据层：只 insert 不 update、可解释、可重放、带 source（PROPOSED）
@@ -26,6 +28,7 @@ amended: 2026-09-17（QNT-4 §0 D2.7 ingestion_batch）
 - D2.5 许可驱动的删除是**按 `source` 整体 drop 分区/文件**，不是逐行 UPDATE/DELETE；执行前须 owner 确认并记入 ADR 修订。
 - D2.6 原始供应商响应（raw payload）以 Parquet/JSONL 按 `source/quote_date` 分文件落盘（`data/raw/`，gitignore），DB 中只存归一化行 + raw 文件的 hash 引用。
 - D2.7（QNT-4 新增，承接 verify-c 对 D2.4 的 REJECT）每次摄取写 `ingestion_batch(batch_id 单调, source, source_version, content_sha256, row_count, manifest_path)`，replay 以 `batch_id ≤ N` 为界而非时间戳；Parquet 文件不可变，manifest 记 hash。
+- D2.8（QNT-38 新增，承接 ADR-0003 §4.2「校验边界」；来源：ADR-0003 §4.2，owner 2026-09-21 裁决 3A）**校验单位是 manifest 内每个 `batch_id` 的目录 `.../source=<s>/batch=<batch_id>/`**。对清单内的每个 batch 目录，实际文件集合必须**恰好等于** manifest 登记的集合（不缺、不多、sha/size 一致）——batch 目录在提交后不可变（§4.3），所以任何多出的文件都是变异而非合法数据。清单外的 batch 目录（含 R3 的晚到 batch、run 之后的正常新摄取）**不扫描、不校验、不读取**。因此"多出文件"只在 batch 目录粒度判定，永不会把晚到 batch 误判为变异。
 
 ## Evidence
 
@@ -50,4 +53,4 @@ ThetaData §8(e)（30 天 expunge，含衍生作品）；Massive §8（终止即
 ## 未决项（verify-c REJECT，原文摘录，待 owner / planner 裁决）
 
 - 2026-09-17T00:38Z：仅记录各表 `max(ingested_at)` 不是稳定快照：以后插入一条相同或回填的时间戳即可改变旧 run；`source/quote_date` 的 Parquet 路径也未定义不可覆盖的对象名和精确文件清单。→ D2.7 承接。
-- 2026-09-17T05:11Z：`batch_id` 单调分配不等于按序提交：批次 1 未完成、批次 2 先完成时保存 `N=2`；之后批次 1 完成，同一 `batch_id <= 2` 的结果就从 B 变为 B+A。必须固定 run 的确切已提交 batch/file 集合及 hash，或明确无未完成低序号批次的封闭提交水位；补入晚到/乱序提交、源文件变异后旧 run 重放不变的验收。**此项涉及可重放硬边界，D2.7 尚未闭合。**
+- 2026-09-17T05:11Z：`batch_id` 单调分配不等于按序提交：批次 1 未完成、批次 2 先完成时保存 `N=2`；之后批次 1 完成，同一 `batch_id <= 2` 的结果就从 B 变为 B+A。必须固定 run 的确切已提交 batch/file 集合及 hash，或明确无未完成低序号批次的封闭提交水位；补入晚到/乱序提交、源文件变异后旧 run 重放不变的验收。**此项涉及可重放硬边界，D2.7 尚未闭合。** → D2.8 承接（QNT-38）
