@@ -2,11 +2,13 @@
 
 - 调研日期：2026-09-20；**数据重采日期：2026-09-21**（凭据来源整改，见下"采集认证口径与 provenance"）；基线 `main` @ `d4b447e`
 - **本文只做"业务逻辑参考"的可行性判定与许可证审查，不引入任何依赖、不建议任何代码复制。**是否引入某个库作为依赖由各落地卡（QNT-27～QNT-33）在 ADR 中单独裁决。
-- 事实采集脚本：`docs/research/probes/oss_probe.py`（37 个仓库；GitHub REST + PyPI JSON；**stdlib `urllib`，无第三方依赖、不依赖 `gh` CLI**；运行入口 `scripts/run_probe.sh`（凭据失败即 exit 1，不回落本机凭据）；`python docs/research/probes/oss_probe.py > results.json` 一键复现），本次结果 git 追踪于 `docs/research/probes/oss-results.json`（`probed_at=2026-09-21T05:04:05Z`）
-- **采集认证口径与 provenance（2026-09-21 整改）**：脚本默认走**匿名**路径；匿名配额 60 req/h，37 仓库需 ~110 次请求，实测会在第 ~20 个仓库耗尽（脚本按 `X-RateLimit-Remaining=0` 识别为 rate-limit、逐条打印并以非 0 退出，**不会把失败写成"仓库不存在"**）。因此本版数据由 **1Password 注入的只读 PAT** 采集：
-  - **凭据来源**：`op run --env-file=docs/research/probes/probe.env.tpl`，模板内仅含引用 `"op://quant-dev/GitHub - PAT/credential"`（item 名含空格，引用须加引号），读入后 `.strip()` 注入为 `GITHUB_TOKEN`。**凭据值不打印、不写文件、不入 JSON**；仓库内只有 `*.tpl` 与本文出现 `op://` 引用字面量。`op read` 失败即 exit 1 报"凭据不可用"，**不回落任何本机凭据路径**（禁用 `gh auth token` / `gh api` / `~/.netrc`）。
-  - **本版数据**：`probed_at=2026-09-21T05:04:05Z`，37/37 采集成功、`failures=[]`，`auth_mode=token(op://quant-dev/GitHub - PAT)`。
-  - **历史说明（保留，不得抹去）**：第一版数据（commit `7dbd996`–`5843a84`，`probed_at` 2026-09-20T04:28:49Z / 05:58:39Z）由**本机 `gh auth token` 采集**，凭据来源不符合 AGENTS.md「凭据只来自 vault 经 op 注入」条款，经 verify-b 两次 REJECT、owner 2026-09-21 裁决后**整体弃用**；`oss-results.json` 已被本次重采结果**整体替换**，不保留旧文件任何一行。弃用原因是**凭据来源不合规**，与数据数值本身是否准确无关。
+- 事实采集脚本：`docs/research/probes/oss_probe.py`（37 个仓库；GitHub REST + PyPI JSON；**stdlib `urllib`，无第三方依赖、不依赖 `gh` CLI**；运行入口 `scripts/run_probe.sh`（凭据失败即 exit 1，不回落本机凭据）；`python docs/research/probes/oss_probe.py > results.json` 一键复现），本次结果 git 追踪于 `docs/research/probes/oss-results.json`（`probed_at=2026-09-21T05:20:50Z`）
+- **采集认证口径与 provenance（2026-09-21 第二次整改）**：脚本默认走**匿名**路径；匿名配额 60 req/h，37 仓库需 ~110 次请求，实测会在第 ~20 个仓库耗尽（脚本按 `X-RateLimit-Remaining=0` 识别为 rate-limit、逐条打印并以非 0 退出，**不会把失败写成"仓库不存在"**）。因此本版数据由 **1Password 注入的 fine-grained PAT** 采集：
+  - **凭据来源**：`op run --env-file=docs/research/probes/probe.env.tpl`，模板内仅含引用 `"op://quant-dev/GitHub Personal Access Token/token"`（item 名含空格、字段名为 `token`，引用须加引号），读入后 `.strip()` 注入为 `GITHUB_TOKEN`。**凭据值不打印、不写文件、不入 JSON**；仓库内只有 `*.tpl` 与本文出现引用字面量。`op read` 失败即 exit 1 报"凭据不可用"，**不回落任何本机凭据路径**（禁用 `gh auth token` / `gh api` / `~/.netrc`）。
+  - **凭据权限（owner 2026-09-21 声明 + 本次实测）**：fine-grained PAT，**Public repositories only、零额外 permission（无任何 repository / account permission 勾选）**，有效期 **90 天**。实测佐证：带该 token 请求 `GET /rate_limit` 与 `GET /repos/{owner}/{repo}` 均 200、`X-RateLimit-Limit=5000`（已认证额度），且响应**不返回 `X-OAuth-Scopes` 头**——该头仅 classic PAT / OAuth token 才有，其缺失即 fine-grained 凭据的特征。**到期日未能从接口取得**：本次响应未返回 `github-authentication-token-expiration` 头（GitHub 仅对部分请求路径返回），vault 条目的非机密字段也为空，故有效期一项按 **owner 声明的 90 天**记载（条目创建于 2026-09-21T05:16:58Z，据此约 2026-12-20 到期，**未经接口核实**）。
+  - **本版数据**：`probed_at=2026-09-21T05:20:50Z`，37/37 采集成功、`failures=[]`，`auth_mode=token(op://quant-dev/GitHub Personal Access Token)`。
+  - **历史说明一（保留，不得抹去）**：第一版数据（commit `7dbd996`–`5843a84`，`probed_at` 2026-09-20T04:28:49Z / 05:58:39Z）由**本机 `gh auth token` 采集**，凭据来源不符合 AGENTS.md「凭据只来自 vault 经 op 注入」条款，经 verify-b 两次 REJECT、owner 2026-09-21 裁决后**整体弃用**。弃用原因是**凭据来源不合规**，与数据数值本身是否准确无关。
+  - **历史说明二（保留，不得抹去）**：第二版数据（commit `a8d7307`，`probed_at` 2026-09-21T05:04:05Z）虽已走 op 注入，但所用条目 `op://quant-dev/GitHub - PAT/credential` 实为 **classic PAT**，实测 `X-OAuth-Scopes = delete:packages, repo, workflow, write:packages`——**含写权限**，与 owner 采纳的"public 只读、零额外 scope"不符，且当时 `:6` 写作"只读 PAT"属**错误声明**。经 verify-b REJECT、owner 裁决后该 classic PAT **已 revoke**、旧 vault 条目**已删除**，数据由本版**整体替换**。`oss-results.json` 每次整改均为整体重建，不保留任何一版旧文件的行。
 - 校验脚本：`docs/research/probes/test_oss_probe.py`（19 项失败分类自检，离线）、`docs/research/probes/check_doc_consistency.py`（事实表 37 行 ↔ JSON 一致性，离线）
 - **活跃度口径**：`commits_1y` = `GET /repos/{r}/commits?since=<今日-365d>` 分页计数（默认分支）；`pushed_at` / `latest_release` 取仓库与 `releases/latest`。计数含 merge commit，跨仓库不可直接比大小，只用于判断"是否仍在维护"。
 - **许可证口径**：SPDX 取 GitHub License API `license.spdx_id`；返回 `NOASSERTION` 的四个仓库（OpenBB / vectorbt / MinerU / Zotero）已逐个读取许可证正文，结论见 §7。**SPDX 字段不是法律意见**；§7 标红项在后续卡中不得引入其代码。
@@ -28,7 +30,7 @@
 
 ## 1. 全量事实表（37 个候选，按模块分组）
 
-下表所有数值来自 `probes/oss-results.json`，`probed_at=2026-09-21T05:04:05Z`。`c1y` = 近一年提交数（口径见文首）。**"3.14"列**（口径经 verify-b 2026-09-20 复审后收紧）：`Y` = PyPI classifier 含 3.14 **或**已发 cp314 wheel；`未标注` = **无 3.14 classifier / 无 cp314 wheel，兼容性未验证**——注意这**不等于"不支持"**，若其 `requires_python` 无上界且有 sdist，3.14 下仍可能正常安装，只是上游未声明、本文未实测；`N` = 有确凿证据无法在 3.14 安装（目前仅 qlib：无 sdist 且 wheel 止于 cp312，见 §4.1）；`未实测` = 未走 PyPI 分发或本文未采集；`—` = 非 Python 包。**本列不得单独作为"排除某库"的理由**。
+下表所有数值来自 `probes/oss-results.json`，`probed_at=2026-09-21T05:20:50Z`。`c1y` = 近一年提交数（口径见文首）。**"3.14"列**（口径经 verify-b 2026-09-20 复审后收紧）：`Y` = PyPI classifier 含 3.14 **或**已发 cp314 wheel；`未标注` = **无 3.14 classifier / 无 cp314 wheel，兼容性未验证**——注意这**不等于"不支持"**，若其 `requires_python` 无上界且有 sdist，3.14 下仍可能正常安装，只是上游未声明、本文未实测；`N` = 有确凿证据无法在 3.14 安装（目前仅 qlib：无 sdist 且 wheel 止于 cp312，见 §4.1）；`未实测` = 未走 PyPI 分发或本文未采集；`—` = 非 Python 包。**本列不得单独作为"排除某库"的理由**。
 
 | 模块 | 仓库 | SPDX | c1y | 最后 push | 最新 release | 3.14 |
 |---|---|---|---|---|---|---|
@@ -65,7 +67,7 @@
 | 策略工厂 | [ranaroussi/quantstats](https://github.com/ranaroussi/quantstats) | Apache-2.0 | 13 | 2026-07-20 |  v0.0.81 (2026-01-13) | 未标注 |
 | paper 交易 | [alpacahq/alpaca-py](https://github.com/alpacahq/alpaca-py) | Apache-2.0 | 65 | 2026-09-18 |  v0.44.0 (2026-08-11) | Y |
 | paper 交易 | [hummingbot/hummingbot](https://github.com/hummingbot/hummingbot) | Apache-2.0 | 1703 |  2026-09-20 |  v2.16.0 (2026-07-29) | 未实测 |
-| paper 交易 | [freqtrade/freqtrade](https://github.com/freqtrade/freqtrade) | **GPL-3.0** | 3290 |  2026-09-21 |  2026.8 (2026-08-31) | — |
+| paper 交易 | [freqtrade/freqtrade](https://github.com/freqtrade/freqtrade) | **GPL-3.0** | 3294 |  2026-09-21 |  2026.8 (2026-08-31) | — |
 | paper 交易 | [jesse-ai/jesse](https://github.com/jesse-ai/jesse) | MIT | 445 | 2026-09-17 | — | 未实测 |
 | paper 交易 | [ib-api-reloaded/ib_async](https://github.com/ib-api-reloaded/ib_async) | BSD-2-Clause | 10 | 2026-08-19 |  v2.0.1 (2025-06-22) | 未实测 |
 | 跨模块 | [stefan-jansen/machine-learning-for-trading](https://github.com/stefan-jansen/machine-learning-for-trading) | MIT | 751 |  2026-09-21 |  v3.1.0-artifacts (2026-09-20) | — |
@@ -191,7 +193,7 @@
 - **不可照搬的原因**：Cython（`.pyx`）+ 面向做市高频，与我们日线级别研究定位相差较远 → 只取分层语义。
 
 ### 6.3 freqtrade/freqtrade — GPL-3.0 ⚠️（只可参考思路，见 §7.1）
-- 仓库 <https://github.com/freqtrade/freqtrade>；c1y=3290，2026.8 (2026-08-31)。**活跃度最高的可读参考。**
+- 仓库 <https://github.com/freqtrade/freqtrade>；c1y=3294，2026.8 (2026-08-31)。**活跃度最高的可读参考。**
 - **可借鉴的具体业务逻辑（思路层面，不可复制代码）**：① `freqtrade/optimize/analysis/` 下 **`lookahead.py` + `recursive.py`** —— 用"逐步截断历史重跑并比对信号"的方式**自动化检测前视偏差与递归依赖**。这是极少数公开实现的工程化前视检测，**QNT-30 应实现同类自检**；② `optimize/backtesting.py` 的退出优先级建模——`_get_close_rate_for_stoploss` / `_get_close_rate_for_roi` 分开计算止损与止盈成交价（`:597` / `:651`），解决"同一根 K 线内止损与止盈都触发时按哪个成交"这一日线回测核心歧义；③ `data/history/datahandlers/` 的 **`parquetdatahandler.py` / `featherdatahandler.py` / `arrowdatahandler.py` / `jsondatahandler.py` 多格式可插拔**（`idatahandler.py` 定义接口）——与我们 Parquet 基线同向。
 - ⚠️ **GPL-3.0：以上仅可作为设计思路，后续卡不得引入其代码。**
 
