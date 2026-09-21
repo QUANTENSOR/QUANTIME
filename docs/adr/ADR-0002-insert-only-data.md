@@ -30,6 +30,8 @@ amended:
 - D2.7（QNT-4 新增，承接 verify-c 对 D2.4 的 REJECT）每次摄取写 `ingestion_batch(batch_id 单调, source, source_version, content_sha256, row_count, manifest_path)`，replay 以 `batch_id ≤ N` 为界而非时间戳；Parquet 文件不可变，manifest 记 hash。
 - D2.8（QNT-38 新增，承接 ADR-0003 §4.2「校验边界」；来源：ADR-0003 §4.2，owner 2026-09-21 裁决 3A）**校验单位是 manifest 内每个 `batch_id` 的目录 `.../source=<s>/batch=<batch_id>/`**。对清单内的每个 batch 目录，实际文件集合必须**恰好等于** manifest 登记的集合（不缺、不多、sha/size 一致）——batch 目录在提交后不可变（§4.3），所以任何多出的文件都是变异而非合法数据。清单外的 batch 目录（含 R3 的晚到 batch、run 之后的正常新摄取）**不扫描、不校验、不读取**。因此"多出文件"只在 batch 目录粒度判定，永不会把晚到 batch 误判为变异。
 
+> 编者说明（QNT-38）：D2.4 的 `ingested_at <= 截止点` 与 D2.7 的 `batch_id ≤ N` 两处重放水位均**被 D2.8 取代**，原文按"原文照录"原则保留，不再作为重放边界；D2.4 的"结果必须逐字节一致"、D2.7 的 `ingestion_batch` 表 / Parquet 不可变 / manifest 记 hash 仍然有效。重放范围以 run 的 manifest 精确文件清单为唯一边界，且清单固定于 run 开始时刻——ADR-0003 §4.2「重放」条原文："重放读 manifest 的**精确文件清单**而非 `batch_id ≤ N`（回应 ADR-0002 未决项第 2 条，见 §9.4）。`batch_ids` 只能包含 run 开始时刻 `ingestion_batch` 中**已提交**的 batch（§4.3 提交顺序保证"已提交 ⇒ 文件完整且 sha 已知"）"。因此批次 2 先提交、批次 1 晚到时，批次 1 不在清单内，对已建 manifest 的旧 run 不可见（ADR-0003 §4.2 R3）。
+
 ## Evidence
 
 ThetaData §8(e)（30 天 expunge，含衍生作品）；Massive §8（终止即删）；Databento 无 redistribution 限制但合同原文未见；yfinance 2025-04 断供事件说明 fallback 源不稳定；全 universe 5 年 EOD 链在 Postgres ≈135–195 GB（§2.4）。
@@ -42,9 +44,9 @@ ThetaData §8(e)（30 天 expunge，含衍生作品）；Massive §8（终止即
 
 ## Consequences
 
-+ 任意历史结论可复现；− 存储放大（同键多版本）、查询要经视图；需新增：DB 权限迁移、`latest per source` 视图测试、`data_snapshot` 表、`ingestion_batch` 表。
++ 任意历史结论可复现；− 存储放大（同键多版本）、查询要经视图；需新增：DB 权限迁移、`latest per source` 视图测试、`data_snapshot` 表、`ingestion_batch` 表、run `manifest.json`（D2.8）。
 
-> 编者说明：QNT-2 草案 Consequences 仅列 `data_snapshot` 表；`ingestion_batch` 表为承接 QNT-4 D2.7 时在 Consequences 补入，Decision 正文 D2.7 仍为 QNT-4 原文。
+> 编者说明：QNT-2 草案 Consequences 仅列 `data_snapshot` 表；`ingestion_batch` 表为承接 QNT-4 D2.7 时在 Consequences 补入，Decision 正文 D2.7 仍为 QNT-4 原文；run `manifest.json` 为承接 QNT-38 D2.8 时补入，Decision 正文 D2.8 仍为 ADR-0003 §4.2 原文。
 
 ## Revisit trigger
 
