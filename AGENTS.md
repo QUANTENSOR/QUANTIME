@@ -12,7 +12,7 @@ quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究�
 
 - **ADR-0001 凭据边界**：任何 agent 永不接触实盘券商 / 交易所主网凭据；开发、回测、paper 全程 paper / testnet / demo 凭据；实盘下单路径只允许"生成意图 → 输出给人"，由 owner 在 agent 不可达的环境人工确认执行；Robinhood 仅 owner 手动终端。
 - **ADR-0002 数据层**：市场数据与账本表只 insert 不 update / delete；每行带 `source` / `source_version` / `ingested_at` / `run_id`；每次摄取写 `ingestion_batch`；任何结论必须可解释、可按批次重放。
-- **凭据来源**：Bifrost key 共用 1Password vault `health-dev`；交易所、数据源等其余凭据只来自 vault `quant-dev`。一律 `op read` / `op run` 注入子进程，读取时 `.strip()`；禁止手抄、打印、写文件、入库。仓库只跟踪 `*.tpl`（含 `op://` 引用），所有真实 `.env*` 保持 ignored，每次 commit 前看 stage。
+- **凭据来源**：平台基础设施类凭据（Bifrost、Exa）属 1Password vault `health-dev`，引用分别为 `op://health-dev/Bifrost/credential`、`op://health-dev/Exa/credential`；交易所、数据源等业务凭据只来自 vault `quant-dev`。两类一律 `op read` / `op run` 注入子进程，读取时 `.strip()`；禁止手抄、打印、写文件、入库。仓库只跟踪 `*.tpl`（含 `op://` 引用），所有真实 `.env*` 保持 ignored，每次 commit 前看 stage。
 - **常驻只读检出**：`/home/workspace/quantime` 是 owner 的常驻检出，只读——不在其中改文件、不切分支。所有改动在 `multica repo checkout` 的专用分支或独立 worktree 里做。
 - **`main` PR-only**：不直推 main；不绕过、不削弱任何 check / review / ruleset。
 - **不按名字 pkill**；需要停进程按端口取 PID。改主机（systemd unit、目录属主、全局配置）的操作先在任务卡评论里逐项列出（路径 + 改前/改后，值打码），owner 确认后再动手。
