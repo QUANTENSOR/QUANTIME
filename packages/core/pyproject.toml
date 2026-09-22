@@ -1,0 +1,16 @@
+[project]
+name = "quantime-core"
+version = "0.0.0"
+description = "quantime 横切层：路径规范、id 生成、host allowlist、确定性 Parquet writer"
+requires-python = ">=3.14"
+dependencies = [
+    "pyarrow>=21",
+    "python-ulid>=4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quantime_core"]

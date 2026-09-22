@@ -1,0 +1,59 @@
+name: CI
+
+# ADR-0003 §3.2/§9：lint（ruff）+ import-linter + pytest，Python 3.14（QNT-27 范围 9）。
+# 不下载任何行情数据；唯一的网络访问是 uv 装依赖。
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14 and sync workspace
+        run: uv sync --frozen --python 3.14
+
+      - name: Lint (ruff)
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Dependency direction (import-linter, ADR-0003 §3.2)
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Static guards (ADR-0002 只 insert / crypto-boundaries ②)
+        run: |
+          echo "--- 写入路径不得出现改写语义 ---"
+          ! grep -rEn --include='*.py' 'UPDATE|DELETE|overwrite|mode=.w.' packages/ \
+            | grep -v '/tests/' | grep .
+          echo "--- 非 allowlist 文件不得出现主网 host 字面量 ---"
+          # `grep -rEn` 的输出是 `path:lineno:text`，注释过滤必须剥掉这段前缀再看行首，
+          # 否则 `grep -v '^\s*#'` 永远匹配不到（QNT-27 P2：CI run 35566457361 失败点）。
+          # 范围不变（整个 packages/ 非测试代码），只修过滤方式。
+          ! grep -rEn --include='*.py' \
+            'api\.binance\.com|fapi\.binance\.com|api\.bybit\.com|www\.okx\.com|api\.bitget\.com' \
+            packages/ | grep -v '/tests/' | grep -vP '^[^:]+:\d+:\s*#' | grep .
+
+      - name: Bench input reproducibility (ADR-0003 §5.1)
+        run: uv run python fixtures/bench/bench_gen.py --check-expected

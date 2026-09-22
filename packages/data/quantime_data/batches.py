@@ -1,0 +1,426 @@
+"""append-only 摄取写入 API（ADR-0003 §4.3，承接 ADR-0002 D2.1/D2.7）。
+
+写入顺序（§4.3 原文 + QNT-27 R1/R2 返修）：
+    **先取 batch 全局唯一性锁**（独占创建 `batch_manifest/<id>.json.lock`，任何落盘之前）
+    → 落 raw → 写归一化 Parquet 到临时名（`data/_staging/`，位于所有读侧枚举范围之外）
+    → 计算 sha → **原子发布**到最终路径 → 发布清单 JSON → 最后 insert `ingestion_batch` 行
+
+唯一性登记介质：`data/meta/batch_manifest/<batch_id>.json` 的**独占创建**即锁（planner 裁决，
+2026-09-21）；`ingestion_batch` 行仍是最后一步 insert。锁在任何字节落盘之前取得，
+因此同 batch_id 的第二次提交在碰到任何既有文件之前就被拒绝，第一次的落盘结果逐字节不变。
+
+所有**最终**文件（湖 Parquet、清单 JSON、`ingestion_batch` 行）只经
+`parquet_io.publish_*` 发布——先在 `data/_staging/` 完整写入并 close，再 `os.link` 到最终
+路径：不存在才发布，且最终路径任何时刻要么不存在、要么是完整内容。
+**不在最终路径上 `O_CREAT|O_EXCL` 之后再写 payload**：那样创建与写入之间该路径以 size=0
+可见，并发读侧会把在途文件当成已提交内容登记进 manifest（verify-a R2 P1）。
+
+本模块**只新建文件、从不改写既有文件**：最终 batch 目录若已存在文件即拒绝；
+重跑同区间写新 `batch_id` + `rerun_of`；许可驱动的删除是整源 drop + 追加 `license_drop`
+墓碑行（D2.5），永不逐行改写。未出现在 `ingestion_batch` 的文件视为不存在。
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pyarrow as pa
+from quantime_core import parquet_io
+from quantime_core.ids import assert_valid_id, new_batch_id
+from quantime_core.paths import (
+    PROVENANCE_COLUMNS,
+    AssetClass,
+    DataType,
+    Freq,
+    LakePath,
+    Market,
+    MetaTable,
+    assert_batch_kind,
+    assert_source,
+    meta_batch_dir,
+    source_of_batch_dir,
+    staging_dir,
+)
+
+#: `ingestion_batch` 表 schema（§4.3 字段原文；provenance 五列一并落在行上）。
+INGESTION_BATCH_SCHEMA = pa.schema(
+    [
+        pa.field("batch_id", pa.string(), nullable=False),
+        pa.field("source", pa.string(), nullable=False),
+        pa.field("source_version", pa.string(), nullable=False),
+        pa.field("market", pa.string(), nullable=False),
+        pa.field("asset_class", pa.string(), nullable=False),
+        pa.field("datatype", pa.string(), nullable=False),
+        pa.field("freq", pa.string(), nullable=False),
+        pa.field("scope", pa.string(), nullable=False),
+        pa.field("range_start", pa.timestamp("us", tz="UTC"), nullable=True),
+        pa.field("range_end", pa.timestamp("us", tz="UTC"), nullable=True),
+        pa.field("row_count", pa.int64(), nullable=False),
+        pa.field("content_sha256", pa.string(), nullable=False),
+        pa.field("raw_sha256", pa.string(), nullable=True),
+        pa.field("manifest_path", pa.string(), nullable=False),
+        pa.field("committed_at", pa.timestamp("us", tz="UTC"), nullable=False),
+        pa.field("ingested_at", pa.timestamp("us", tz="UTC"), nullable=False),
+        pa.field("rerun_of", pa.string(), nullable=True),
+        pa.field("run_id", pa.string(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+    ]
+)
+
+_INGESTION_BATCH_COLUMNS: tuple[str, ...] = tuple(INGESTION_BATCH_SCHEMA.names)
+
+
+class BatchWriteError(RuntimeError):
+    """写入违反 append-only / 单源不变量 / provenance 要求。"""
+
+
+@dataclass(frozen=True, slots=True)
+class FileEntry:
+    """清单里的一条文件记录（path 相对 `root`）。"""
+
+    path: str
+    sha256: str
+    size: int
+
+    def as_dict(self) -> dict[str, object]:
+        return {"path": self.path, "sha256": self.sha256, "size": self.size}
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, object]) -> FileEntry:
+        return cls(path=str(raw["path"]), sha256=str(raw["sha256"]), size=int(raw["size"]))  # type: ignore[arg-type]
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedBatch:
+    """`commit_batch` 的结果。"""
+
+    batch_id: str
+    source: str
+    batch_dir: str
+    parts: tuple[FileEntry, ...]
+    raw_files: tuple[FileEntry, ...]
+    manifest_path: str
+    content_sha256: str
+    row_count: int
+    kind: str
+    rerun_of: str | None
+    meta_files: tuple[FileEntry, ...] = field(default=())
+
+
+def _now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC).replace(microsecond=0)
+
+
+def _file_entry(root: Path, abs_path: Path) -> FileEntry:
+    return FileEntry(
+        path=abs_path.relative_to(root).as_posix(),
+        sha256=parquet_io.file_sha256(abs_path),
+        size=abs_path.stat().st_size,
+    )
+
+
+def _assert_provenance(table: pa.Table, *, source: str, batch_id: str) -> None:
+    """缺 ADR-0002 五列 → 报错；行 `source` ≠ 路径 `source=` 分量 → 拒绝（§4.1 单源不变量）。
+
+    调用方必须传**最终落盘的表**（`columns=` 投影之后）——否则投影可以把五列全部
+    抹掉而校验仍看见它们（verify-a P1-2）。
+    """
+    missing = [c for c in PROVENANCE_COLUMNS if c not in table.column_names]
+    if missing:
+        raise BatchWriteError(f"缺少 ADR-0002 provenance 列: {missing}")
+    if table.num_rows == 0:
+        raise BatchWriteError("batch 不得为空表（空摄取不写 batch）")
+    distinct_sources = set(table.column("source").to_pylist())
+    if distinct_sources != {source}:
+        raise BatchWriteError(
+            f"单源不变量：行 source={sorted(distinct_sources)} 与路径 source={source!r} 不一致"
+        )
+    distinct_batches = set(table.column("batch_id").to_pylist())
+    if distinct_batches != {batch_id}:
+        raise BatchWriteError(
+            f"行 batch_id={sorted(distinct_batches)} 与目标 batch_id={batch_id!r} 不一致"
+        )
+
+
+def _assert_empty_target(batch_dir: Path) -> None:
+    """同一 `batch=<id>/` 目录下已有文件 → 拒绝（append-only，batch 目录提交后不可变）。
+
+    这是**早退**检查，不是安全保证：真正的保证来自 `_claim_batch_id` 的唯一性锁与
+    `parquet_io.publish_*` 的独占创建。
+    """
+    if batch_dir.exists() and any(batch_dir.iterdir()):
+        raise BatchWriteError(
+            f"batch 目录已存在文件，拒绝覆盖（append-only，"
+            f"重跑请用新 batch_id + rerun_of）: {batch_dir}"
+        )
+
+
+def batch_manifest_path(batch_id: str) -> str:
+    """该 batch 的文件级清单位置（相对 root）。"""
+    return f"data/meta/batch_manifest/{assert_valid_id(batch_id, field='batch_id')}.json"
+
+
+def publish_staging(root: Path) -> Path:
+    """发布用临时目录（`data/_staging/`）——所有最终文件的必经中转。
+
+    它在 `committed_batch_files` / `_scan_dir` / `_ingestion_batch_records` 的枚举范围之外，
+    且与 `data/` 下的最终路径同一文件系统（`os.link` 要求）。
+    """
+    return root / staging_dir()
+
+
+def _publish_final_bytes(root: Path, path: Path, payload: bytes) -> str:
+    """原子发布一个最终文件；已存在 → 拒绝且原文件字节不变。"""
+    try:
+        return parquet_io.publish_bytes(path, payload, staging=publish_staging(root))
+    except parquet_io.AlreadyPublishedError as exc:
+        raise BatchWriteError(f"最终文件已存在，拒绝二次发布（append-only）: {path}") from exc
+
+
+def _publish_final_text(root: Path, path: Path, text: str) -> None:
+    """原子发布一个最终文本文件（清单 JSON）；已存在 → 拒绝且原文件字节不变。"""
+    _publish_final_bytes(root, path, text.encode("utf-8"))
+
+
+def batch_claim_path(batch_id: str) -> str:
+    """batch_id 全局唯一性登记（相对 root）——独占创建它即取得该 batch_id。"""
+    return batch_manifest_path(batch_id) + ".lock"
+
+
+def _claim_batch_id(root: Path, batch_id: str) -> Path:
+    """在**任何字节落盘之前**独占登记 batch_id；已被登记 → 拒绝。
+
+    唯一性介质是 `data/meta/batch_manifest/<id>.json.lock` 的独占创建（planner 裁决
+    2026-09-21：manifest 目录存在性即锁，`ingestion_batch` 行仍最后 insert）。
+    batch_id 是 ULID、永不复用：崩溃留下的登记不再释放，重跑请用新 batch_id + `rerun_of`。
+    """
+    claim = root / batch_claim_path(batch_id)
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        claim.touch(exist_ok=False)
+    except FileExistsError as exc:
+        raise BatchWriteError(
+            f"batch_id 已被登记，拒绝二次提交（append-only，"
+            f"重跑请用新 batch_id + rerun_of）: {batch_id}"
+        ) from exc
+    return claim
+
+
+def commit_batch(
+    root: str | os.PathLike[str],
+    table: pa.Table,
+    *,
+    market: Market | str,
+    asset_class: AssetClass | str,
+    datatype: DataType | str,
+    freq: Freq | str,
+    scope: str,
+    source: str,
+    source_version: str,
+    run_id: str,
+    batch_id: str | None = None,
+    kind: str = "ingest",
+    rerun_of: str | None = None,
+    raw_files: tuple[Path, ...] = (),
+    range_start: dt.datetime | None = None,
+    range_end: dt.datetime | None = None,
+    columns: tuple[str, ...] | None = None,
+) -> CommittedBatch:
+    """把一个归一化表提交为一个新 batch。
+
+    顺序：**先取 batch_id 唯一性锁**（任何落盘之前）→ staging 写临时名并 close → sha →
+    原子发布到最终 batch 目录 → 原子发布清单 JSON → 最后 insert `ingestion_batch` 行。
+    任一步失败都不会留下已登记但不完整的 batch，也**绝不改动任何既有文件的字节**；
+    最终路径上从不出现半写内容，因此并发读侧只会看到「尚未提交」或「完整已提交」。
+    """
+    root = Path(root)
+    source = assert_source(source)
+    kind = assert_batch_kind(kind)
+    batch_id = assert_valid_id(batch_id, field="batch_id") if batch_id else new_batch_id()
+    if rerun_of is not None:
+        assert_valid_id(rerun_of, field="rerun_of")
+    if kind == "rerun" and rerun_of is None:
+        raise BatchWriteError("kind='rerun' 必须带 rerun_of=<原 batch_id>")
+    assert_valid_id(run_id, field="run_id")
+
+    # provenance 校验的对象是**最终落盘的 schema**（投影之后），否则 `columns=` 能把
+    # ADR-0002 五列悄悄投影掉（verify-a P1-2）。校验发生在任何落盘之前。
+    try:
+        final_table = parquet_io.canonical_table(table, columns)
+    except KeyError as exc:
+        raise BatchWriteError(f"columns 投影失败: {exc}") from exc
+    _assert_provenance(final_table, source=source, batch_id=batch_id)
+
+    spec = LakePath(
+        market=Market(market),
+        asset_class=AssetClass(asset_class),
+        datatype=DataType(datatype),
+        freq=Freq(freq),
+        scope=scope,
+        source=source,
+        batch_id=batch_id,
+    )
+    batch_dir = root / spec.batch_dir
+    _assert_empty_target(batch_dir)
+    if source_of_batch_dir(spec.batch_dir) != source:
+        raise BatchWriteError("路径 source= 分量与 source 参数不一致")
+
+    raw_entries = tuple(_file_entry(root, Path(p)) for p in raw_files)
+
+    # 唯一性锁：任何字节落盘之前。之后的每一次写都是独占创建。
+    _claim_batch_id(root, batch_id)
+
+    payload = parquet_io.table_to_bytes(final_table)
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    final_part = batch_dir / "part-0000.parquet"
+    content_sha256 = _publish_final_bytes(root, final_part, payload)
+
+    parts = (
+        FileEntry(
+            path=final_part.relative_to(root).as_posix(),
+            sha256=content_sha256,
+            size=len(payload),
+        ),
+    )
+    manifest_rel = batch_manifest_path(batch_id)
+    manifest_abs = root / manifest_rel
+    manifest_abs.parent.mkdir(parents=True, exist_ok=True)
+    _publish_final_text(
+        root,
+        manifest_abs,
+        json.dumps(
+            {
+                "batch_id": batch_id,
+                "source": source,
+                "batch_dir": spec.batch_dir.as_posix(),
+                "parts": [e.as_dict() for e in parts],
+                "raw": [e.as_dict() for e in raw_entries],
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n",
+    )
+
+    now = _now()
+    meta_entry = _insert_ingestion_batch_row(
+        root,
+        {
+            "batch_id": batch_id,
+            "source": source,
+            "source_version": source_version,
+            "market": str(spec.market),
+            "asset_class": str(spec.asset_class),
+            "datatype": str(spec.datatype),
+            "freq": str(spec.freq),
+            "scope": spec.scope,
+            "range_start": range_start,
+            "range_end": range_end,
+            "row_count": table.num_rows,
+            "content_sha256": content_sha256,
+            "raw_sha256": raw_entries[0].sha256 if raw_entries else None,
+            "manifest_path": manifest_rel,
+            "committed_at": now,
+            "ingested_at": now,
+            "rerun_of": rerun_of,
+            "run_id": run_id,
+            "kind": kind,
+        },
+    )
+    return CommittedBatch(
+        batch_id=batch_id,
+        source=source,
+        batch_dir=spec.batch_dir.as_posix(),
+        parts=parts,
+        raw_files=raw_entries,
+        manifest_path=manifest_rel,
+        content_sha256=content_sha256,
+        row_count=table.num_rows,
+        kind=kind,
+        rerun_of=rerun_of,
+        meta_files=(meta_entry,),
+    )
+
+
+def _insert_ingestion_batch_row(root: Path, row: dict[str, object]) -> FileEntry:
+    """insert 一行 `ingestion_batch`（新 batch 目录 = 新文件，永不改旧文件）。"""
+    meta_dir = root / meta_batch_dir(MetaTable.INGESTION_BATCH, str(row["batch_id"]))
+    _assert_empty_target(meta_dir)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    table = pa.Table.from_pylist([row], schema=INGESTION_BATCH_SCHEMA)
+    target = meta_dir / "part-0000.parquet"
+    payload = parquet_io.table_to_bytes(table, _INGESTION_BATCH_COLUMNS)
+    try:
+        sha = parquet_io.publish_bytes(target, payload, staging=publish_staging(root))
+    except parquet_io.AlreadyPublishedError as exc:
+        raise BatchWriteError(f"ingestion_batch 行已存在，拒绝二次 insert: {target}") from exc
+    return FileEntry(path=target.relative_to(root).as_posix(), sha256=sha, size=len(payload))
+
+
+def append_license_drop(
+    root: str | os.PathLike[str],
+    *,
+    source: str,
+    source_version: str,
+    run_id: str,
+    market: Market | str,
+    asset_class: AssetClass | str,
+    datatype: DataType | str,
+    freq: Freq | str,
+    scope: str,
+) -> str:
+    """追加 `kind='license_drop'` 墓碑行（D2.5；实际文件删除由 owner 确认后人工执行）。"""
+    root = Path(root)
+    batch_id = new_batch_id()
+    _claim_batch_id(root, batch_id)
+    now = _now()
+    _insert_ingestion_batch_row(
+        root,
+        {
+            "batch_id": batch_id,
+            "source": assert_source(source),
+            "source_version": source_version,
+            "market": str(Market(market)),
+            "asset_class": str(AssetClass(asset_class)),
+            "datatype": str(DataType(datatype)),
+            "freq": str(Freq(freq)),
+            "scope": scope,
+            "range_start": None,
+            "range_end": None,
+            "row_count": 0,
+            "content_sha256": "",
+            "raw_sha256": None,
+            "manifest_path": "",
+            "committed_at": now,
+            "ingested_at": now,
+            "rerun_of": None,
+            "run_id": run_id,
+            "kind": "license_drop",
+        },
+    )
+    return batch_id
+
+
+def committed_batch_files(root: str | os.PathLike[str]) -> list[Path]:
+    """已提交的 `ingestion_batch` 分片文件列表（显式文件列表，不用 glob 读数据，§4.2）。"""
+    meta_root = Path(root) / "data" / "meta" / "ingestion_batch"
+    if not meta_root.is_dir():
+        return []
+    files: list[Path] = []
+    for batch_dir in sorted(meta_root.iterdir()):
+        if batch_dir.is_dir() and batch_dir.name.startswith("batch="):
+            files.extend(sorted(p for p in batch_dir.iterdir() if p.suffix == ".parquet"))
+    return files
+
+
+def read_ingestion_batch(root: str | os.PathLike[str]) -> pa.Table:
+    """读取全部已提交 `ingestion_batch` 行。"""
+    files = committed_batch_files(root)
+    if not files:
+        return INGESTION_BATCH_SCHEMA.empty_table()
+    return pa.concat_tables([parquet_io.read_table(f) for f in files]).sort_by("batch_id")

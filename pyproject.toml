@@ -1,0 +1,56 @@
+[project]
+name = "quantime"
+version = "0.0.0"
+description = "quantime — 美股 + 美股期权 + 加密、日线级别量化研究系统（workspace root）"
+requires-python = ">=3.14"
+dependencies = [
+    "quantime-core",
+    "quantime-data",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+quantime-core = { workspace = true }
+quantime-data = { workspace = true }
+
+[dependency-groups]
+dev = [
+    # bench 生成器（fixtures/bench/bench_gen.py）与测试用；numpy 是 ADR-0003 §2 的计算基线。
+    "numpy>=2.3",
+    "pytest>=9.1",
+    "ruff>=0.16",
+    "import-linter>=2.15",
+    "pyyaml>=6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/core/tests", "packages/data/tests", "tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.importlinter]
+root_packages = ["quantime_core", "quantime_data"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "ADR-0003 §3.2 分层：data → core 单向，core 不得 import 上层"
+type = "layers"
+layers = ["quantime_data", "quantime_core"]
+
+[[tool.importlinter.contracts]]
+name = "ADR-0003 §3.3 core 不得 import 任何网络客户端"
+type = "forbidden"
+source_modules = ["quantime_core"]
+forbidden_modules = ["httpx", "websockets", "requests", "urllib", "http", "socket"]
