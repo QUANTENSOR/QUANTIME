@@ -5,8 +5,12 @@
 
 1. **host 闸**：`allowlist.assert_public_readonly_host(host)`。未登记 host、以及登记为
    `public_readonly=False` 的交易 host，一律拒绝（`core/allowlist.py` 的两个断言互不放行）。
-2. **路径闸**：只放行 `PUBLIC_READONLY_PREFIXES` 白名单内的路径前缀。白名单而非黑名单：
+2. **路径闸**：先把路径化到无歧义形式（`canonical_path`：拒绝百分号编码、`.`/`..` 段、
+   空段 `//`、反斜杠与控制字符），再按类别放行——REST 端点 `PUBLIC_READONLY_REST_PATHS`
+   **精确匹配**，归档文件树 `PUBLIC_READONLY_ARCHIVE_PREFIXES` 按前缀。白名单而非黑名单：
    黑名单漏一个新端点就等于放行，白名单漏一个只是少取一类数据（fail-closed）。
+   拒绝歧义输入而不是「折叠后放行」，是因为校验的字符串必须与最终发送的字符串逐字节
+   相同——否则客户端/服务端各自的规范化差异就是一条绕过（verify-a R1 P1-2）。
    下单 / 账户 / 资金 / User Data Stream 路径都不在白名单内，因此**不可能**从本出口发出
    （被拒的具体端点逐条列在 `tests/test_transport.py` 的参数化用例里）。
 
@@ -30,22 +34,45 @@ from urllib.parse import urlsplit
 
 from quantime_core.allowlist import HostEntry, HostNotAllowedError, assert_public_readonly_host
 
-#: 允许经本出口访问的路径前缀（白名单）。只含**无需 API key 的行情/元数据**端点：
-#: Vision 归档的按文件前缀，以及无 key 现货镜像列出的 `/api/v3/*` 只读路径。
-#: 任何交易 / 账户 / 资金 / User Data Stream 路径都不在此列（ADR-0001 D1.8）。
-PUBLIC_READONLY_PREFIXES: tuple[str, ...] = (
+#: 归档文件树的允许前缀。Vision 归档是按 symbol/freq/日期展开的目录树，文件名无法穷举，
+#: 所以这一类只能按前缀放行——但前缀之后的部分已被 `_canonical_path` 规范化过
+#: （无 `..`、无空段、无百分号编码），因此前缀匹配不再能被 `/data/spot/monthly/../../api/v3/account`
+#: 这类输入穿过（verify-a R1 P1-2）。
+PUBLIC_READONLY_ARCHIVE_PREFIXES: tuple[str, ...] = (
     "/data/spot/daily/",
     "/data/spot/monthly/",
     "/data/futures/um/daily/",
     "/data/futures/um/monthly/",
-    "/api/v3/ping",
-    "/api/v3/time",
-    "/api/v3/exchangeInfo",
-    "/api/v3/klines",
-    "/api/v3/uiKlines",
-    "/api/v3/avgPrice",
-    "/api/v3/ticker",
 )
+
+#: REST 端点：**逐个精确匹配**，不做前缀匹配。端点是有限可枚举的，前缀匹配在这里只会
+#: 放行本不该放行的后缀（`/api/v3/account` 恰好以 `/api/v3/a` 开头这类近亲风险），
+#: 所以白名单收紧成等值比较。任何下单 / 账户 / 资金 / User Data Stream 路径都不在此列
+#: （ADR-0001 D1.8）。
+PUBLIC_READONLY_REST_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/v3/ping",
+        "/api/v3/time",
+        "/api/v3/exchangeInfo",
+        "/api/v3/klines",
+        "/api/v3/uiKlines",
+        "/api/v3/avgPrice",
+        "/api/v3/ticker",
+        "/api/v3/ticker/24hr",
+        "/api/v3/ticker/price",
+        "/api/v3/ticker/bookTicker",
+    }
+)
+
+#: 兼容旧名：出口放行的全部路径（归档前缀 + REST 精确路径）。守卫用它一次扫全集。
+PUBLIC_READONLY_PREFIXES: tuple[str, ...] = (
+    *PUBLIC_READONLY_ARCHIVE_PREFIXES,
+    *sorted(PUBLIC_READONLY_REST_PATHS),
+)
+
+#: 路径里一律不接受的字符：百分号（编码歧义）、反斜杠（某些栈当分隔符）、空白与控制字符。
+#: 归档路径只含 `[A-Za-z0-9._/-]`，REST 端点同理，所以这不是权衡，是把可能性关掉。
+_FORBIDDEN_PATH_CHARS = ("%", "\\", " ", "\t", "\r", "\n")
 
 #: 退避阶梯（秒）。首次重试 1s，其后翻倍；长度即最大重试次数。
 BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
@@ -97,17 +124,56 @@ def split_public_url(url: str) -> tuple[str, str]:
         raise TransportBoundaryError("公共只读出口不得携带凭据（ADR-0001 D1.8）")
     if not parts.hostname:
         raise TransportBoundaryError(f"URL 无 host: {url!r}")
+    if parts.fragment:
+        raise TransportBoundaryError(f"公共只读出口不接受带 fragment 的 URL: {url!r}")
+    # query 不参与路由，但别的栈可能把它再拼回路径；点段与控制字符一律不放行。
+    if ".." in parts.query or any(ord(c) < 0x20 for c in parts.query):
+        raise TransportBoundaryError(f"query 含点段或控制字符，拒绝发出请求: {url!r}")
     return parts.hostname, parts.path
 
 
-def assert_public_readonly_path(path: str) -> str:
-    """路径闸：只放行白名单前缀。"""
-    if not any(path.startswith(prefix) for prefix in PUBLIC_READONLY_PREFIXES):
-        raise TransportBoundaryError(
-            f"路径不在公共只读白名单内，拒绝发出请求: {path!r}"
-            f"（新增端点须先进 PUBLIC_READONLY_PREFIXES，且必须无需 API key）"
-        )
+def canonical_path(path: str) -> str:
+    """把 URL 路径化到**无歧义形式**，任何歧义输入直接拒绝——不做「修正后放行」。
+
+    HTTP 客户端与服务端各自会对路径做规范化：httpx 会把白名单端点后面跟的 `..` 段就地
+    折掉，于是发出去的是**上一级**的某个路径；而 `%2e%2e` 它原样发出、留给服务端去折。
+    「校验原始字符串、发送规范化字符串」这个缝隙足以让一个白名单外的路径从本出口发出
+    ——verify-a R1 P1-2 复现到的就是这条（被拒的具体形态逐条列在
+    `tests/test_transport.py` 的参数化用例里）。
+
+    这里不追着各家的折叠规则跑，而是**只接受本来就规范的路径**：不含百分号编码、无 `.` /
+    `..` 段、无空段（`//`）、无反斜杠与空白。这样「校验的字符串」与「发送的字符串」必然
+    逐字节相同，中间不存在可被利用的规范化差异。
+    """
+    if not path.startswith("/"):
+        raise TransportBoundaryError(f"路径必须以 / 开头: {path!r}")
+    for ch in _FORBIDDEN_PATH_CHARS:
+        if ch in path:
+            raise TransportBoundaryError(
+                f"路径含歧义字符 {ch!r}，拒绝发出请求（百分号编码/反斜杠/空白一律不接受）: {path!r}"
+            )
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in path):
+        raise TransportBoundaryError(f"路径含控制字符，拒绝发出请求: {path!r}")
+    segments = path.split("/")[1:]
+    for seg in segments:
+        if seg in ("", ".", ".."):
+            raise TransportBoundaryError(
+                f"路径含空段或点段（`//`、`.`、`..`），拒绝发出请求: {path!r}"
+            )
     return path
+
+
+def assert_public_readonly_path(path: str) -> str:
+    """路径闸：先规范化校验，再按类别放行——归档按前缀，REST **精确匹配**。"""
+    path = canonical_path(path)
+    if path in PUBLIC_READONLY_REST_PATHS:
+        return path
+    if any(path.startswith(prefix) for prefix in PUBLIC_READONLY_ARCHIVE_PREFIXES):
+        return path
+    raise TransportBoundaryError(
+        f"路径不在公共只读白名单内，拒绝发出请求: {path!r}"
+        f"（新增端点须先进 PUBLIC_READONLY_REST_PATHS/ARCHIVE_PREFIXES，且必须无需 API key）"
+    )
 
 
 def assert_public_readonly_url(url: str) -> HostEntry:

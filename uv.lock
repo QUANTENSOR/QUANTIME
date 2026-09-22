@@ -376,6 +376,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "import-linter" },
     { name = "numpy" },
     { name = "pytest" },
@@ -391,6 +392,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = ">=0.28" },
     { name = "import-linter", specifier = ">=2.15" },
     { name = "numpy", specifier = ">=2.3" },
     { name = "pytest", specifier = ">=9.1" },

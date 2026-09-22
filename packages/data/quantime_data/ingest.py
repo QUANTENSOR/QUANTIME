@@ -165,8 +165,37 @@ def fetch_files(
     return tuple(got), tuple(missing)
 
 
+def requested_window(spec: IngestSpec) -> tuple[dt.datetime, dt.datetime]:
+    """请求区间的 UTC 半开窗口 `[start 00:00, end+1d 00:00)`。
+
+    `IngestSpec` 的 `start`/`end` 是**含**两端的日期，而上游归档的最小粒度是整月（K 线、
+    funding）或整日（metrics）——取回来的行几乎总是比请求的区间宽。窗口在这里算一次，
+    裁剪与覆盖判定都用它，两处不会各算各的。
+    """
+    start = dt.datetime.combine(spec.start, dt.time.min, tzinfo=dt.UTC)
+    end = dt.datetime.combine(spec.end + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC)
+    return start, end
+
+
+def clip_to_window(table: pa.Table, time_column: str, spec: IngestSpec) -> pa.Table:
+    """只保留落在请求区间内的行（`start <= t < end+1d`，UTC）。
+
+    不裁剪的话，`start=end=2026-08-15` 会提交整个八月 31 行——写进湖的区间与
+    `ingestion_batch.range_start/range_end` 声明的区间不符，重放时读到的也不是请求的那段
+    （verify-a R1 P2-3）。裁剪发生在盖 provenance **之前**，所以被丢掉的行从未进过 batch。
+    """
+    if table.num_rows == 0:
+        return table
+    start, end = requested_window(spec)
+    times = table.column(time_column).to_pylist()
+    keep = [i for i, t in enumerate(times) if start <= t < end]
+    if len(keep) == table.num_rows:
+        return table
+    return table.take(pa.array(keep, pa.int64()))
+
+
 def normalize(spec: IngestSpec, files: Sequence[FetchedFile]) -> pa.Table:
-    """把取回的文件归一化并拼成一张表（按时间列升序，行序确定）。"""
+    """把取回的文件归一化、**裁到请求区间**并拼成一张表（按时间列升序，行序确定）。"""
     dtype = spec.datatype
     if dtype is DataType.KLINE:
         parts = [bp.normalize_klines(f.payload, symbol=spec.symbol) for f in files]
@@ -181,7 +210,7 @@ def normalize(spec: IngestSpec, files: Sequence[FetchedFile]) -> pa.Table:
         raise IngestError(f"不支持的 datatype: {dtype}")
     if not parts:
         return schema.empty_table()
-    return pa.concat_tables(parts).sort_by(time_col)
+    return clip_to_window(pa.concat_tables(parts).sort_by(time_col), time_col, spec)
 
 
 def stamp_provenance(
@@ -248,7 +277,7 @@ def ingest_one(
         )
     table = normalize(spec, fetched)
     if table.num_rows == 0:
-        raise IngestError(f"{spec.describe()}：归一化后 0 行，不写空 batch")
+        raise IngestError(f"{spec.describe()}：归一化并裁到请求区间后 0 行，不写空 batch")
 
     batch_id = new_batch_id()
     # 唯一性登记必须在 **raw 副本落盘之前**：raw 目录按 batch_id 分，`commit_batch` 内部
@@ -299,10 +328,17 @@ def expected_step(spec: IngestSpec) -> dt.timedelta | None:
 
 
 def audit_result(root: str | os.PathLike[str], result: IngestResult) -> audit.AuditResult:
-    """对刚提交的 batch 做缺口/重复核查——**只读那一个 batch 的分片**。"""
+    """对刚提交的 batch 做缺口/重复核查——**只读那一个 batch 的分片**。
+
+    整档缺失（`result.missing`）一并传进去：核查读的是落盘的表，表里看不出请求区间的
+    某一整个月压根没取到，所以覆盖状态必须由摄取侧告诉它（verify-a R1 P2-4）。
+    """
     spec = result.spec
     time_col = bp.TIME_COLUMN[str(spec.datatype)]
-    note = f"missing_upstream_files={len(result.missing)}" if result.missing else ""
+    start, end = requested_window(spec)
+    note = f"requested={start.date().isoformat()}..{spec.end.isoformat()}"
+    if result.missing:
+        note += f" missing_upstream_files={len(result.missing)}"
     return audit.audit_batch_file(
         Path(root) / result.committed.parts[0].path,
         scope=spec.scope,
@@ -312,6 +348,7 @@ def audit_result(root: str | os.PathLike[str], result: IngestResult) -> audit.Au
         time_column=time_col,
         step=expected_step(spec),
         key_columns=("symbol", time_col),
+        missing_upstream=result.missing,
         note=note,
     )
 

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import pytest
-from quantime_core.allowlist import BINANCE_VISION_ARCHIVE
+from quantime_core.allowlist import BINANCE_VISION_ARCHIVE, BINANCE_VISION_SPOT_MIRROR
 from quantime_data.transport import (
     BACKOFF_SCHEDULE,
     PublicTransport,
@@ -19,6 +19,7 @@ from quantime_data.transport import (
 )
 
 ARCHIVE = BINANCE_VISION_ARCHIVE.host
+MIRROR = BINANCE_VISION_SPOT_MIRROR.host
 GOOD_URL = f"https://{ARCHIVE}/data/spot/monthly/klines/BTCUSDT/1d/BTCUSDT-1d-2026-08.zip"
 
 
@@ -120,6 +121,105 @@ def test_trading_and_account_paths_are_rejected(path):
 )
 def test_public_readonly_paths_are_allowed(path):
     assert assert_public_readonly_path(path) == path
+
+
+#: R1 P1-2 的反例集：这些 URL 在修复前**全部通过**路径闸（原规则对原始 path 做 startswith），
+#: 而 httpx 发出去的是白名单外的路径。每一条都必须在请求发出之前被拒。
+NORMALIZATION_BYPASSES = [
+    # httpx 会把 `..` 段就地折掉，发出去的是上一级的路径——校验的和发送的不是同一个字符串。
+    f"https://{MIRROR}/api/v3/klines/../account",
+    f"https://{MIRROR}/api/v3/klines/./../account",
+    f"https://{MIRROR}/api/v3/klines/../../api/v3/account",
+    # 百分号编码的点段：httpx 原样发出，留给服务端去折——绕过点更隐蔽。
+    f"https://{MIRROR}/api/v3/klines/%2e%2e/account",
+    f"https://{MIRROR}/api/v3/klines/%2E%2E/account",
+    # 编码斜杠：某些栈会先解码再路由。
+    f"https://{MIRROR}/api/v3/klines%2F..%2Faccount",
+    # 反斜杠。
+    f"https://{MIRROR}/api/v3/klines\\..\\account",
+    # 白名单端点的后缀延伸——前缀匹配的本来面目。
+    f"https://{MIRROR}/api/v3/klinesX",
+    # query 里夹带点段。
+    f"https://{MIRROR}/api/v3/klines?symbol=../account",
+    # 归档前缀下的逃逸——这批最要命：path 以合法归档前缀开头，前缀匹配（新旧规则都一样）
+    # 放行它，能拦住的只有规范化校验本身。REST 那批另有精确匹配兜底，这批没有。
+    f"https://{ARCHIVE}/data/spot/monthly/../../api/v3/account",
+    f"https://{ARCHIVE}/data/spot/monthly/./../../api/v3/account",
+    f"https://{ARCHIVE}/data/spot/monthly/%2e%2e/%2e%2e/api/v3/account",
+    f"https://{ARCHIVE}/data/spot/monthly/..%2f..%2fapi/v3/account",
+]
+
+#: 另一类：原规则也拦得住，但形态歧义、不同栈解释不一致，一并关掉（纵深，不是回归）。
+AMBIGUOUS_PATHS = [
+    f"https://{MIRROR}//api/v3/klines",
+    f"https://{MIRROR}/api/v3//account",
+    f"https://{MIRROR}/api/v3%2Faccount",
+]
+
+
+@pytest.mark.parametrize("url", [*NORMALIZATION_BYPASSES, *AMBIGUOUS_PATHS])
+def test_normalization_bypasses_are_rejected_before_any_request(url):
+    """R1 P1-2：歧义路径一律在出口前拒绝，opener 收不到任何请求。
+
+    关键在「拒绝」而不是「折叠后再判」：只要校验的字符串与最终发送的字符串可能不同，
+    两者之间就有一条缝。这里把缝关掉——只接受本来就规范的路径。
+    """
+    transport, opener = make_transport(Response(200, b"x"))
+    with pytest.raises(TransportBoundaryError):
+        transport.get(url)
+    assert opener.urls == [], "歧义 URL 被发了出去"
+
+
+def test_the_bypass_corpus_would_have_passed_the_old_prefix_rule():
+    """反例集不得是「本来就拦得住的东西」——否则这组回归形同虚设。
+
+    这里就地重演修复前的规则（对**原始** path 做 startswith），断言每一条当时都能通过。
+    集合里任何一条如果原本就会被拒，它就不是这次修复的回归证据，应挪进 `AMBIGUOUS_PATHS`。
+    """
+    from urllib.parse import urlsplit
+
+    from quantime_data.transport import PUBLIC_READONLY_PREFIXES
+
+    for url in NORMALIZATION_BYPASSES:
+        path = urlsplit(url).path
+        assert any(path.startswith(prefix) for prefix in PUBLIC_READONLY_PREFIXES), (
+            f"{path!r} 在旧规则下本来就会被拒，它证明不了这次修复"
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v3/klinesX",
+        "/api/v3/klines/extra",
+        "/api/v3/accountInfo",
+        "/api/v3/pingpong",
+    ],
+)
+def test_rest_whitelist_is_exact_match_not_prefix(path):
+    """R1 P1-2：REST 端点精确匹配——白名单端点的任何后缀延伸都不放行。
+
+    前缀匹配下 `/api/v3/klinesX` 会通过；端点是有限可枚举的，没有理由用前缀。
+    """
+    with pytest.raises(TransportBoundaryError, match="白名单"):
+        assert_public_readonly_path(path)
+
+
+def test_archive_tree_still_matches_by_prefix():
+    """归档是目录树、文件名不可穷举，仍按前缀放行——但前缀之后已被规范化过。"""
+    ok = "/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-08.zip"
+    assert assert_public_readonly_path(ok) == ok
+
+
+def test_a_trading_path_cannot_hide_behind_an_archive_prefix():
+    """归档前缀 + 点段回退，同样拒绝——前缀放行不等于前缀之后可以为所欲为。"""
+    with pytest.raises(TransportBoundaryError, match="点段"):
+        assert_public_readonly_path("/data/spot/monthly/../../api/v3/account")
+
+
+def test_fragment_is_rejected():
+    with pytest.raises(TransportBoundaryError, match="fragment"):
+        split_public_url(f"https://{MIRROR}/api/v3/klines#/../account")
 
 
 def test_assert_public_readonly_url_returns_the_allowlist_entry():

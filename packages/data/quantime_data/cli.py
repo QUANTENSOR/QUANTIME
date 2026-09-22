@@ -28,7 +28,7 @@ from quantime_core.paths import AssetClass, DataType, Freq
 
 from . import audit as audit_mod
 from . import ingest as ingest_mod
-from .transport import PublicTransport, Response
+from .transport import PublicTransport, Response, assert_public_readonly_url
 from .universe import load_universe
 
 #: HTTP 超时（秒）。归档 zip 可以不小，给足时间但不无限等。
@@ -53,7 +53,14 @@ def _http_opener():
     )
 
     def opener(url: str) -> Response:
-        response = client.get(url)
+        # 出口闸已在 `PublicTransport.get` 里过过一遍，这里再过一遍**httpx 自己解析后的
+        # URL**：闸校验的是字符串，发出的是 httpx 规范化后的结果，二者若有差异就是一条
+        # 绕过（verify-a R1 P1-2）。`transport.canonical_path` 已把歧义输入全部拒掉，
+        # 所以正常情况下这一遍必然同样通过——它存在是为了让「校验的 ≠ 发送的」这件事
+        # 一旦发生就在发请求**之前**炸掉，而不是靠远端拒绝。
+        request = client.build_request("GET", url)
+        assert_public_readonly_url(str(request.url))
+        response = client.send(request)
         retry_after = response.headers.get("Retry-After")
         return Response(
             status=response.status_code,

@@ -244,18 +244,27 @@ def test_same_batch_id_second_commit_leaves_every_file_byte_identical(
     assert not staging.exists() or not any(staging.rglob("*")), "_staging/ 有残留"
 
 
+def _lake_is_empty(root) -> bool:
+    """湖里与 meta 下一个字节都没有——用来断言「拒绝发生在任何落盘之前」。"""
+    return (
+        not (root / "data" / "lake").exists()
+        and not (root / "data" / "meta" / "ingestion_batch").exists()
+    )
+
+
 def test_claim_is_reentrant_only_for_the_holder_that_took_it(root, run_id, lake_kw, make_table):
-    """`claim=` 只让**取到锁的那一次调用**重入；别人拿不到那个 Path，也就绕不过去。
+    """`claim=` 只让**独占取到锁的那一次调用**重入。
 
     摄取链路要在 `commit_batch` 之前写 raw 副本，所以必须能提前取锁再把它传回来。
-    这条钉住：传对的锁通过，伪造一个路径不通过。
+    这条钉住：真凭证通过，别的 batch 的凭证不通过。
     """
     bid = new_batch_id()
     claim = batches.claim_batch_id(root, bid)
+    other = batches.claim_batch_id(root, new_batch_id())
     table = make_table(source="synthetic_bench", batch_id=bid, run_id=run_id)
 
-    # 伪造的 holder（另一个 batch_id 的锁）不得放行。
-    with pytest.raises(BatchWriteError, match="已被登记"):
+    # 另一个 batch 的真凭证也不行——凭证绑定到具体 batch_id。
+    with pytest.raises(BatchWriteError, match="不符"):
         batches.commit_batch(
             root,
             table,
@@ -263,7 +272,7 @@ def test_claim_is_reentrant_only_for_the_holder_that_took_it(root, run_id, lake_
             source_version="v1",
             run_id=run_id,
             batch_id=bid,
-            claim=root / batches.batch_claim_path(new_batch_id()),
+            claim=other,
             **lake_kw,
         )
 
@@ -279,6 +288,164 @@ def test_claim_is_reentrant_only_for_the_holder_that_took_it(root, run_id, lake_
         **lake_kw,
     )
     assert committed.batch_id == bid
+
+
+def test_a_forged_path_is_not_a_claim_even_when_the_lock_does_not_exist(
+    root, run_id, lake_kw, make_table
+):
+    """R1 P1：没取过锁、凭 `root / batch_claim_path(bid)` 构造一个 Path 传进来 → 拒绝。
+
+    修复前这条能过：`claim=` 只比较 Path 值，而那个值任何人都算得出来（`batch_id` 和
+    `root` 都是公开信息），锁文件甚至根本不必存在。凭证必须是**独占取得**的产物。
+    """
+    bid = new_batch_id()
+    table = make_table(source="synthetic_bench", batch_id=bid, run_id=run_id)
+    forged = root / batches.batch_claim_path(bid)
+    assert not forged.exists(), "前提：锁根本没被取过"
+
+    with pytest.raises(BatchWriteError, match="不是 claim_batch_id 返回的所有权凭证"):
+        batches.commit_batch(
+            root,
+            table,
+            source="synthetic_bench",
+            source_version="v1",
+            run_id=run_id,
+            batch_id=bid,
+            claim=forged,
+            **lake_kw,
+        )
+    assert _lake_is_empty(root), "拒绝发生在落盘之后（应在任何字节之前）"
+
+
+def test_third_party_cannot_reuse_a_lock_another_holder_took(root, run_id, lake_kw, make_table):
+    """R1 P1：别的 run 已经取走锁，第三方构造同一路径想蹭进去 → 拒绝。
+
+    这是上一条的「锁存在」变体：文件在那儿、路径也对，但第三方手里没有取锁时生成的
+    nonce，而锁文件只落了 nonce 的 sha256——读一遍文件也拼不出凭证。
+    """
+    bid = new_batch_id()
+    holder = batches.claim_batch_id(root, bid)  # 「别的 run」取走了锁
+    table = make_table(source="synthetic_bench", batch_id=bid, run_id=run_id)
+    lock = root / batches.batch_claim_path(bid)
+    assert lock.is_file()
+    assert holder.nonce not in lock.read_text(encoding="ascii"), "锁文件不得泄露 nonce 本身"
+
+    with pytest.raises(BatchWriteError, match="不是 claim_batch_id 返回的所有权凭证"):
+        batches.commit_batch(
+            root,
+            table,
+            source="synthetic_bench",
+            source_version="v1",
+            run_id=run_id,
+            batch_id=bid,
+            claim=lock,
+            **lake_kw,
+        )
+    assert _lake_is_empty(root)
+
+
+def test_a_fabricated_claim_object_with_a_guessed_nonce_is_rejected(
+    root, run_id, lake_kw, make_table
+):
+    """R1 P1：连 `BatchClaim` 都自己造一个（类型对、路径对、nonce 猜的）→ 仍然拒绝。
+
+    上一条挡的是「传错类型」，这条挡的是「类型也对」——校验的最后一环是锁文件里登记的
+    digest 与凭证的 nonce 对不对得上，不是对象长什么样。
+    """
+    bid = new_batch_id()
+    batches.claim_batch_id(root, bid)
+    table = make_table(source="synthetic_bench", batch_id=bid, run_id=run_id)
+    fabricated = batches.BatchClaim(
+        batch_id=bid, path=root / batches.batch_claim_path(bid), nonce="0" * 32
+    )
+
+    with pytest.raises(BatchWriteError, match="锁已被另一次取得"):
+        batches.commit_batch(
+            root,
+            table,
+            source="synthetic_bench",
+            source_version="v1",
+            run_id=run_id,
+            batch_id=bid,
+            claim=fabricated,
+            **lake_kw,
+        )
+    assert _lake_is_empty(root)
+
+
+def test_a_claim_whose_lock_vanished_is_rejected(root, run_id, lake_kw, make_table):
+    """锁文件被外力删掉后，旧凭证不再有效——它已经不是「当前这把锁」的凭证了。
+
+    否则「删锁 → 旧持有者照样重入」就等于唯一性登记可以被绕过一次。
+    """
+    bid = new_batch_id()
+    claim = batches.claim_batch_id(root, bid)
+    (root / batches.batch_claim_path(bid)).unlink()
+    table = make_table(source="synthetic_bench", batch_id=bid, run_id=run_id)
+
+    with pytest.raises(BatchWriteError, match="唯一性登记已不存在"):
+        batches.commit_batch(
+            root,
+            table,
+            source="synthetic_bench",
+            source_version="v1",
+            run_id=run_id,
+            batch_id=bid,
+            claim=claim,
+            **lake_kw,
+        )
+    assert _lake_is_empty(root)
+
+
+def test_concurrent_contention_for_one_batch_id_leaves_exactly_one_winner(root):
+    """并发争用同一个 batch_id：恰好一个线程取到锁，其余全部被拒。
+
+    `O_CREAT|O_EXCL` 的独占性是这里唯一的仲裁者，所以直接压线程去撞它，而不是串行调两次
+    （串行只能证明「第二次被拒」，证不了「同时来只过一个」）。
+    """
+    import threading
+
+    bid = new_batch_id()
+    barrier = threading.Barrier(8)
+    won: list[batches.BatchClaim] = []
+    lost: list[BatchWriteError] = []
+    lock = threading.Lock()
+
+    def attempt() -> None:
+        barrier.wait()
+        try:
+            claim = batches.claim_batch_id(root, bid)
+        except BatchWriteError as exc:
+            with lock:
+                lost.append(exc)
+        else:
+            with lock:
+                won.append(claim)
+
+    threads = [threading.Thread(target=attempt) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(won) == 1, f"{len(won)} 个线程同时取到了同一个 batch_id 的锁"
+    assert len(lost) == 7
+    # 赢家的凭证确实对应盘上那把锁。
+    on_disk = (root / batches.batch_claim_path(bid)).read_text(encoding="ascii")
+    assert won[0].digest() in on_disk
+
+
+def test_a_lock_file_records_only_the_digest_never_the_nonce(root):
+    """锁文件全世界可读；写进去的必须是 nonce 的 sha256，不是 nonce 本身。
+
+    落 nonce 本身 = 任何读到文件的人都能拼出有效凭证，等于没有凭证。
+    """
+    bid = new_batch_id()
+    claim = batches.claim_batch_id(root, bid)
+    text = (root / batches.batch_claim_path(bid)).read_text(encoding="ascii")
+    assert claim.nonce not in text
+    assert claim.digest() in text
+    assert bid in text
 
 
 def test_uniqueness_claim_precedes_any_write(root, run_id, lake_kw, make_table):

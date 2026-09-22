@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """录制 Binance 公开归档 fixture（**手动运行**，不在 CI 里跑）。
 
-用法：`uv run --extra ingest python fixtures/binance_public/record.py`
+用法：`uv run --package quantime-data --extra ingest python fixtures/binance_public/record.py`
+（`ingest` extra 属 quantime-data 而非根项目——根目录直接 `--extra ingest` 找不到它。
+  verify-a R1 第 5 点）
 
 录制内容只有**响应正文字节**（zip / .CHECKSUM）。请求头、响应头、cookie、时间戳等
 无关字段一律不落盘——它们与数据无关，只会让 fixture 难以复核。

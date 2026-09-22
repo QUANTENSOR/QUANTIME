@@ -15,6 +15,9 @@ from quantime_core.paths import AssetClass, DataType, Freq
 from quantime_data import cli
 from quantime_data.universe import Leg, Universe
 
+# 反例集与 test_transport 共用一份：两处若各写一份，改了一处另一处就悄悄失去覆盖。
+from test_transport import NORMALIZATION_BYPASSES
+
 START = dt.date(2026, 8, 1)
 END = dt.date(2026, 8, 31)
 
@@ -142,3 +145,61 @@ def test_unknown_datatype_is_rejected_by_the_parser():
 def test_missing_subcommand_is_rejected():
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+# ---- R1 P1-2：用真实 httpx 证明「白名单外的路径发不出去」 ----
+
+
+def _mock_http_opener(recorder: list[str]):
+    """把 `cli._http_opener` 的客户端换成 httpx 的 MockTransport（**不出网**）。
+
+    用真 httpx 而不是自己写个假解析器：这条边界正是被 httpx **自己的**规范化绕过的，
+    换成模拟实现就测不到那个行为（verify-a R1 P1-2 的原始反例就来自真实 httpx）。
+    """
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        recorder.append(request.url.path)
+        return httpx.Response(200, content=b"ok")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=False)
+
+    def opener(url: str):
+        from quantime_data.transport import Response, assert_public_readonly_url
+
+        request = client.build_request("GET", url)
+        assert_public_readonly_url(str(request.url))
+        response = client.send(request)
+        return Response(status=response.status_code, content=response.content)
+
+    return opener
+
+
+@pytest.mark.parametrize("url", NORMALIZATION_BYPASSES)
+def test_no_bypass_url_ever_reaches_the_http_transport(url):
+    """端到端：经 `PublicTransport` + 真实 httpx 解析，MockTransport 一个请求也收不到。
+
+    修复前 `/api/v3/klines/../account` 走到这里，handler 记录的 path 是 `/api/v3/account`
+    ——请求确实构造出来了，只是没真的出网。硬边界要求的是**发不出去**，不是「远端会拒」。
+    """
+    from quantime_data.transport import PublicTransport, TransportBoundaryError
+
+    seen: list[str] = []
+    transport = PublicTransport(_mock_http_opener(seen), sleep=lambda _s: None)
+    with pytest.raises(TransportBoundaryError):
+        transport.get(url)
+    assert seen == [], f"白名单外的路径到达了 HTTP 层: {seen}"
+
+
+def test_the_mock_transport_really_does_see_allowed_requests():
+    """反证：同一条链路上，白名单内的 URL 确实一路走到 MockTransport。
+
+    没有这条，上一条测试可能只是因为链路根本不通而「全绿」。
+    """
+    from quantime_data.transport import PublicTransport
+
+    seen: list[str] = []
+    transport = PublicTransport(_mock_http_opener(seen), sleep=lambda _s: None)
+    good = "https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1d/BTCUSDT-1d-2026-08.zip"
+    assert transport.get(good) == b"ok"
+    assert seen == ["/data/spot/monthly/klines/BTCUSDT/1d/BTCUSDT-1d-2026-08.zip"]

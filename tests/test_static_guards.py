@@ -10,6 +10,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 PACKAGES = REPO / "packages"
 
@@ -324,3 +326,37 @@ def test_ci_static_guard_step_covers_everything_the_tests_assert():
     script = _ci_step_script(CI_STATIC_GUARD_STEP)
     for needle in ("UPDATE|DELETE", "api\\.binance\\.com", "/api/v3/(order", "import|from"):
         assert needle in script, f"ci.yml 静态守卫缺少 {needle!r} 这一段"
+
+
+# ---- R1 第 5、6 点：文档命令可用 / 重跑术语统一 ----
+
+
+def test_record_script_documents_a_runnable_command():
+    """`record.py` 的用法行必须是真能跑的那条（verify-a R1 第 5 点）。
+
+    `ingest` extra 属 `quantime-data`，根项目没有它——仓库根目录直接
+    `uv run --extra ingest …` 会报 unknown extra。文档里的命令跑不起来，等于没有文档。
+    """
+    text = (REPO / "fixtures" / "binance_public" / "record.py").read_text(encoding="utf-8")
+    usage = [ln for ln in text.splitlines() if "record.py`" in ln and "uv run" in ln]
+    assert usage, "record.py 缺少用法行"
+    for line in usage:
+        assert "--package quantime-data" in line, f"缺少 --package，根目录跑不通: {line}"
+        assert "--extra ingest" in line, line
+
+
+def test_rerun_is_recorded_as_kind_not_source():
+    """ADR-0003 §4.1/§4.3：`source` 是数据源单值，重跑标在 `kind='rerun'` + `rerun_of`。
+
+    `source='rerun'` 会把「数据从哪来」和「这是第几次跑」挤进同一个字段，单源不变量
+    （同一 batch 的 source 唯一）随即失去意义。这条钉住代码里没有按 source 判重跑的地方。
+    """
+    hits = _grep(r"source\s*[=:]\s*[\"']rerun", PACKAGES)
+    assert hits == [], "出现 source='rerun'（应为 kind='rerun' + rerun_of）:\n" + "\n".join(hits)
+
+    # 「重跑」是 kind 枚举的一个取值，不是一个 source。
+    from quantime_core.paths import PathSpecError, assert_batch_kind
+
+    assert assert_batch_kind("rerun") == "rerun"
+    with pytest.raises(PathSpecError):
+        assert_batch_kind("source_rerun")
