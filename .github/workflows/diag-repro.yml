@@ -1,0 +1,38 @@
+name: DIAG repro (QNT-40, temporary)
+
+on:
+  push:
+    branches: ["agent/impl-b/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ["ubuntu-latest", "ubuntu-24.04", "ubuntu-22.04"]
+        mask:
+          - ""
+          - "AVX512F,AVX512CD,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL"
+          - "AVX2,FMA3,AVX512F,AVX512CD,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --python 3.14
+      - name: CPU
+        run: grep -m1 'model name' /proc/cpuinfo; grep -o -E 'avx512[a-z0-9_]*|avx2|fma' /proc/cpuinfo | sort -u | tr '\n' ' '; echo
+      - name: Dump intermediates
+        env:
+          NPY_DISABLE_CPU_FEATURES: ${{ matrix.mask }}
+        run: uv run python scripts/_diag/dump_intermediates.py
+      - name: bench_gen sha
+        env:
+          NPY_DISABLE_CPU_FEATURES: ${{ matrix.mask }}
+        run: uv run python fixtures/bench/bench_gen.py --print-sha
