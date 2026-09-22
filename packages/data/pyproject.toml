@@ -9,11 +9,22 @@ dependencies = [
     "duckdb>=1.4",
     # DuckDB 的 TIMESTAMPTZ 列转 Python 对象时需要 pytz（views.py 读 provenance 列）。
     "pytz>=2025.2",
+    # 标的清单（universe.yaml）解析。
+    "pyyaml>=6",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+# 摄取 CLI 的网络出口。只有 `quantime_data.cli` import 它，且只在函数体内。
+ingest = [
+    "httpx>=0.28",
+]
+
+[project.scripts]
+quantime-ingest = "quantime_data.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["quantime_data"]

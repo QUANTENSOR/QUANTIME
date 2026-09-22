@@ -117,6 +117,46 @@ def test_fixtures_are_synthetic_only_and_generated_artifacts_not_committed():
     assert generated == [], f"生成物不入库，发现: {generated}"
 
 
+#: AGENTS.md §2「fixtures/ 只放合成数据」的**唯一**豁免目录 → 理由（PR 描述偏离项 #3）。
+#: 离线重放外部接入必须用真实响应的录制，否则测的是我们自己编的格式。
+NON_SYNTHETIC_FIXTURE_DIRS = {
+    "binance_public": "QNT-28：Binance 公开归档的真实响应录制，供离线集成测试重放",
+}
+
+
+def test_only_the_declared_fixture_dir_holds_non_synthetic_data():
+    """录制 fixture 是**逐目录**豁免，不是对 fixtures/ 整体放行。"""
+    fixtures = REPO / "fixtures"
+    dirs = {p.name for p in fixtures.iterdir() if p.is_dir() and p.name != "__pycache__"}
+    undeclared = dirs - {"bench"} - set(NON_SYNTHETIC_FIXTURE_DIRS)
+    assert undeclared == set(), (
+        f"新 fixture 目录未声明合成性: {sorted(undeclared)}"
+        "（合成数据加 `synthetic: true` 头；录制数据须在 NON_SYNTHETIC_FIXTURE_DIRS 注明理由）"
+    )
+
+
+def test_recorded_fixtures_declare_their_provenance_and_record_no_headers():
+    """录制件必须能被独立核对：URL + sha256 + 尺寸在案，且只录响应正文。
+
+    请求/响应头里可能带 cookie、限流配额、节点标识——与数据无关，一律不落盘。
+    """
+    import hashlib
+    import json
+
+    d = REPO / "fixtures" / "binance_public"
+    manifest = json.loads((d / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["synthetic"] is False, "录制件必须显式标 synthetic: false"
+    assert manifest["files"], "MANIFEST 无条目"
+    for entry in manifest["files"]:
+        payload = (d / entry["file"]).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == entry["sha256"], entry["file"]
+        assert len(payload) == entry["size"], entry["file"]
+        assert entry["url"].startswith("https://"), entry["url"]
+    text = (d / "record.py").read_text(encoding="utf-8")
+    for banned in ("headers=", "cookies", "request.headers", "response.headers"):
+        assert banned not in text, f"录制脚本疑似落盘请求/响应头: {banned!r}"
+
+
 def test_bench_generator_makes_no_network_calls():
     """§5.1：基准输入不走网络。"""
     pattern = r"\b(httpx|requests|urllib|socket|websockets|curl|wget)\b"
@@ -152,7 +192,13 @@ def _ci_step_script(step_name: str) -> str:
 
 
 def _run(script: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["bash", "-c", script], cwd=REPO, capture_output=True, text=True)
+    """按 CI 的 shell 跑：`-e` 不可省。
+
+    GitHub Actions 的 `run: |` 用 `shell: /usr/bin/bash -e {0}`。没有 `-e` 时只有
+    **最后一条**命令的退出码算数，守卫步骤里前面几段被改坏也照样"通过"——
+    QNT-28 追加第三、四段检查时，P2 变异正是这样失去效力的。
+    """
+    return subprocess.run(["bash", "-e", "-c", script], cwd=REPO, capture_output=True, text=True)
 
 
 def test_ci_static_guard_step_passes_as_shipped():
@@ -187,7 +233,94 @@ def test_ci_static_guard_keeps_full_scope_and_grants_no_exemption():
     runnable = "\n".join(ln for ln in script.splitlines() if not ln.lstrip().startswith("#"))
     assert COMMENT_FILTER in runnable, "ci.yml 未使用前缀感知的注释过滤"
     assert "grep -v '^\\s*#'" not in runnable, "ci.yml 仍有失效的 `grep -v '^\\s*#'`"
-    assert "packages/ | grep -v '/tests/'" in runnable, "grep 范围被缩小"
+    assert "packages/" in runnable and "grep -v '/tests/'" in runnable, "grep 范围被缩小"
     assert "allowlist.py" not in runnable, "给 allowlist.py 开了豁免"
     for host in ("api\\.binance\\.com", "api\\.bybit\\.com", "www\\.okx\\.com"):
         assert host in runnable, f"host 边界被放宽，缺 {host}"
+
+
+def test_ci_static_guard_fails_on_the_first_check_not_only_the_last():
+    r"""每条检查都必须能单独把步骤打红（QNT-28 变异验证暴露）。
+
+    原写法是一串 `! grep ... | grep .`。`set -e` 按 POSIX **不适用于**被 `!` 取反的
+    命令，所以整步的退出码只由最后一条决定——前面几条命中也照样绿。这条测试逐条注入
+    一个必然命中的模式，断言每一条都能让退出码非 0。
+    """
+    script = _ci_step_script(CI_STATIC_GUARD_STEP)
+    assert _run(script).returncode == 0, "未注入前就是红的"
+
+    # 逐条把模式替换成必然命中的 `.`，确认每条都能单独打红。
+    lines = script.splitlines()
+    deny_idx = [n for n, ln in enumerate(lines) if ln.lstrip().startswith("deny ")]
+    assert len(deny_idx) >= 4, f"ci.yml 只有 {len(deny_idx)} 条 deny，期望 4 条"
+    for i in deny_idx:
+        mutated = list(lines)
+        # 模式可能在同一行，也可能在续行上——两种都换掉第一个引号串。
+        target = i if "'" in lines[i] else i + 1
+        mutated[target] = re.sub(r"'[^']*'", "'.'", mutated[target], count=1)
+        proc = _run("\n".join(mutated))
+        assert proc.returncode != 0, (
+            f"第 {deny_idx.index(i) + 1} 条 deny 命中了却没能把步骤打红:\n{proc.stdout}"
+        )
+
+
+# ---- QNT-28：公开只读摄取的出网边界 ----
+
+#: 唯一允许 import 网络客户端的模块（相对 `packages/`）。
+NETWORK_EGRESS_FILE = "data/quantime_data/cli.py"
+
+#: 交易 / 账户 / 资金端点。公共只读摄取不该认识它们中的任何一个。
+TRADING_ENDPOINT_PATTERN = (
+    r"/api/v3/(order|openOrders|allOrders|account|myTrades|userDataStream)"
+    r"|/fapi/v[0-9]+/(order|positionRisk|account|balance|leverage)"
+    r"|/sapi/"
+)
+
+
+def test_network_clients_appear_only_in_the_ingest_cli():
+    """出网点收敛到一处：第二个 import httpx 的模块就可能绕过 allowlist 与退避。"""
+    # urllib.parse 是纯字符串解析、不出网，所以按子模块匹配而不是整个 urllib。
+    pattern = (
+        r"^\s*(import|from)\s+"
+        r"(httpx|requests|websockets|socket|urllib\.request|http\.client)\b"
+    )
+    files = {_relpath(h) for h in _non_test_hits(_grep(pattern, PACKAGES))}
+    assert files <= {NETWORK_EGRESS_FILE}, f"网络客户端泄漏到: {sorted(files)}"
+
+
+def test_the_ingest_cli_really_is_the_egress():
+    """反证：上一条不是空集通过——CLI 里确实有那个 import。"""
+    hits = _grep(r"import httpx", PACKAGES / "data" / "quantime_data" / "cli.py")
+    assert hits, "cli.py 里没有 httpx —— 出网收敛测试成了空集通过"
+
+
+def test_no_trading_or_account_endpoint_literals_in_packages():
+    """crypto-boundaries ② / ADR-0001 D1.7：摄取路径不得出现下单/账户/资金端点。"""
+    hits = [
+        h for h in _non_test_hits(_grep(TRADING_ENDPOINT_PATTERN, PACKAGES)) if not _is_comment(h)
+    ]
+    assert hits == [], "出现交易/账户/资金端点字面量:\n" + "\n".join(hits)
+
+
+def test_public_readonly_path_whitelist_contains_no_trading_endpoint():
+    """白名单本身也要过一遍这把尺子——它是放行清单，写错就是直接放行。"""
+    from quantime_data.transport import PUBLIC_READONLY_PREFIXES
+
+    bad = [p for p in PUBLIC_READONLY_PREFIXES if re.search(TRADING_ENDPOINT_PATTERN, p)]
+    assert bad == [], f"公共只读白名单里出现交易/账户端点: {bad}"
+
+
+def test_ci_static_guard_egress_scope_is_not_weakened():
+    """ci.yml 的出网点守卫必须精确到 cli.py：放宽到整个包等于不拦（QNT-28）。"""
+    script = _ci_step_script(CI_STATIC_GUARD_STEP)
+    runnable = "\n".join(ln for ln in script.splitlines() if not ln.lstrip().startswith("#"))
+    assert "quantime_data/cli\\.py" in runnable, "出网点豁免不再精确到 cli.py"
+    assert "httpx" in runnable, "ci.yml 缺少网络客户端守卫"
+    assert "/sapi/" in runnable, "ci.yml 缺少交易/账户端点守卫"
+
+
+def test_ci_static_guard_step_covers_everything_the_tests_assert():
+    """CI 与本文件不得各自漂移：这里断言的三段范围，ci.yml 里必须都有。"""
+    script = _ci_step_script(CI_STATIC_GUARD_STEP)
+    for needle in ("UPDATE|DELETE", "api\\.binance\\.com", "/api/v3/(order", "import|from"):
+        assert needle in script, f"ci.yml 静态守卫缺少 {needle!r} 这一段"

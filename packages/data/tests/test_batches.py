@@ -244,6 +244,43 @@ def test_same_batch_id_second_commit_leaves_every_file_byte_identical(
     assert not staging.exists() or not any(staging.rglob("*")), "_staging/ 有残留"
 
 
+def test_claim_is_reentrant_only_for_the_holder_that_took_it(root, run_id, lake_kw, make_table):
+    """`claim=` 只让**取到锁的那一次调用**重入；别人拿不到那个 Path，也就绕不过去。
+
+    摄取链路要在 `commit_batch` 之前写 raw 副本，所以必须能提前取锁再把它传回来。
+    这条钉住：传对的锁通过，伪造一个路径不通过。
+    """
+    bid = new_batch_id()
+    claim = batches.claim_batch_id(root, bid)
+    table = make_table(source="synthetic_bench", batch_id=bid, run_id=run_id)
+
+    # 伪造的 holder（另一个 batch_id 的锁）不得放行。
+    with pytest.raises(BatchWriteError, match="已被登记"):
+        batches.commit_batch(
+            root,
+            table,
+            source="synthetic_bench",
+            source_version="v1",
+            run_id=run_id,
+            batch_id=bid,
+            claim=root / batches.batch_claim_path(new_batch_id()),
+            **lake_kw,
+        )
+
+    # 真正持有者可以继续提交。
+    committed = batches.commit_batch(
+        root,
+        table,
+        source="synthetic_bench",
+        source_version="v1",
+        run_id=run_id,
+        batch_id=bid,
+        claim=claim,
+        **lake_kw,
+    )
+    assert committed.batch_id == bid
+
+
 def test_uniqueness_claim_precedes_any_write(root, run_id, lake_kw, make_table):
     """P1-1：唯一性登记发生在任何字节落盘之前——只登记、不提交，后续提交即被拒。"""
     bid = new_batch_id()
@@ -340,7 +377,7 @@ def test_final_part_publish_refuses_an_existing_file_even_if_earlier_checks_pass
     target = root / first.parts[0].path
     before = target.read_bytes()
 
-    monkeypatch.setattr(batches, "_claim_batch_id", lambda root, batch_id: None)
+    monkeypatch.setattr(batches, "_claim_batch_id", lambda root, batch_id, holder=None: None)
     monkeypatch.setattr(batches, "_assert_empty_target", lambda batch_dir: None)
 
     table = make_table(source="synthetic_bench", batch_id=first.batch_id, run_id=run_id, price0=7.0)

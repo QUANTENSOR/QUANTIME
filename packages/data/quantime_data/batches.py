@@ -191,14 +191,20 @@ def batch_claim_path(batch_id: str) -> str:
     return batch_manifest_path(batch_id) + ".lock"
 
 
-def _claim_batch_id(root: Path, batch_id: str) -> Path:
+def _claim_batch_id(root: Path, batch_id: str, *, holder: Path | None = None) -> Path:
     """在**任何字节落盘之前**独占登记 batch_id；已被登记 → 拒绝。
 
     唯一性介质是 `data/meta/batch_manifest/<id>.json.lock` 的独占创建（planner 裁决
     2026-09-21：manifest 目录存在性即锁，`ingestion_batch` 行仍最后 insert）。
     batch_id 是 ULID、永不复用：崩溃留下的登记不再释放，重跑请用新 batch_id + `rerun_of`。
+
+    `holder` 是调用方**已经持有**的同一把锁（`claim_batch_id` 的返回值）：传它进来即
+    重入，不再独占创建。这不削弱唯一性——别的持有者拿不到这个 `Path`，只有先取得锁的
+    那一次调用才能把它传下去。
     """
     claim = root / batch_claim_path(batch_id)
+    if holder is not None and holder == claim:
+        return claim
     claim.parent.mkdir(parents=True, exist_ok=True)
     try:
         claim.touch(exist_ok=False)
@@ -208,6 +214,15 @@ def _claim_batch_id(root: Path, batch_id: str) -> Path:
             f"重跑请用新 batch_id + rerun_of）: {batch_id}"
         ) from exc
     return claim
+
+
+def claim_batch_id(root: str | os.PathLike[str], batch_id: str) -> Path:
+    """公开入口：在自己写任何 batch 相关字节之前先取得唯一性登记。
+
+    摄取链路要在 `commit_batch` 之前就把上游原始字节写进 `data/raw/<batch_id>/`，
+    所以必须能提前取锁；返回的 `Path` 再作为 `commit_batch(..., claim=...)` 传回去。
+    """
+    return _claim_batch_id(Path(root), batch_id)
 
 
 def commit_batch(
@@ -229,6 +244,7 @@ def commit_batch(
     range_start: dt.datetime | None = None,
     range_end: dt.datetime | None = None,
     columns: tuple[str, ...] | None = None,
+    claim: Path | None = None,
 ) -> CommittedBatch:
     """把一个归一化表提交为一个新 batch。
 
@@ -236,6 +252,9 @@ def commit_batch(
     原子发布到最终 batch 目录 → 原子发布清单 JSON → 最后 insert `ingestion_batch` 行。
     任一步失败都不会留下已登记但不完整的 batch，也**绝不改动任何既有文件的字节**；
     最终路径上从不出现半写内容，因此并发读侧只会看到「尚未提交」或「完整已提交」。
+
+    `claim` 传的是调用方已经用 `claim_batch_id` 取到的同一把锁——摄取链路要先写 raw
+    副本，必须比这里更早取锁。不传就在这里取。
     """
     root = Path(root)
     source = assert_source(source)
@@ -272,7 +291,7 @@ def commit_batch(
     raw_entries = tuple(_file_entry(root, Path(p)) for p in raw_files)
 
     # 唯一性锁：任何字节落盘之前。之后的每一次写都是独占创建。
-    _claim_batch_id(root, batch_id)
+    _claim_batch_id(root, batch_id, holder=claim)
 
     payload = parquet_io.table_to_bytes(final_table)
     batch_dir.mkdir(parents=True, exist_ok=True)

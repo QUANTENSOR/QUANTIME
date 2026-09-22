@@ -6,6 +6,10 @@
 
 字段名沿用 rules 原文 `public_readonly=true/false`，不引入 `kind` 枚举（§3.3）。
 `public_readonly=False` 的条目即 ADR-0001 D1.7 交易 host 集合。
+
+本文件是 host 字面量的**唯一**出处，因此其余模块不得复制 host 字符串，而应引用这里的
+具名条目（如 `BINANCE_VISION_ARCHIVE.host`）。这既让静态守卫 grep 保持有效，
+也保证「改 allowlist 就等于改所有调用方」，不会出现绕过 allowlist 的第二份 host 表。
 """
 
 from __future__ import annotations
@@ -46,21 +50,29 @@ class HostEntry:
     demo_marker: DemoMarker | None = None
 
 
-#: 第一版只含公共只读归档/镜像 host（ADR-0003 §7、§9.5：不使用 `api.binance.com`，
-#: 美国节点 451）。交易 host（`public_readonly=False`）条目由 QNT-33 paper 交易卡加入。
+# 第一版只含公共只读归档/镜像 host（ADR-0003 §7、§9.5）。刻意不收 api.binance.com /
+# fapi.binance.com：本机所在美国节点访问二者返回 451（§9.5 原始裁决，QNT-28 2026-09-21
+# 复测仍为 451）。交易 host（`public_readonly=False`）条目由 QNT-33 paper 交易卡加入。
+
+#: Binance 公开归档（按文件下载 zip + `.CHECKSUM`）——K 线 / fundingRate / metrics 的底座。
+BINANCE_VISION_ARCHIVE = HostEntry(
+    host="data.binance.vision",
+    public_readonly=True,
+    exchange="binance",
+    doc_url="https://github.com/binance/binance-public-data",
+)
+
+#: Binance 无 key 现货行情镜像（`/api/v3/*` 只读子集，不含 User Data Stream）。
+BINANCE_VISION_SPOT_MIRROR = HostEntry(
+    host="data-api.binance.vision",
+    public_readonly=True,
+    exchange="binance",
+    doc_url="https://developers.binance.com/docs/binance-spot-api-docs/faqs/market_data_only",
+)
+
 ALLOWLIST: tuple[HostEntry, ...] = (
-    HostEntry(
-        host="data.binance.vision",
-        public_readonly=True,
-        exchange="binance",
-        doc_url="https://github.com/binance/binance-public-data",
-    ),
-    HostEntry(
-        host="data-api.binance.vision",
-        public_readonly=True,
-        exchange="binance",
-        doc_url="https://developers.binance.com/docs/binance-spot-api-docs/faqs/market_data_only",
-    ),
+    BINANCE_VISION_ARCHIVE,
+    BINANCE_VISION_SPOT_MIRROR,
 )
 
 _BY_HOST: dict[str, HostEntry] = {entry.host: entry for entry in ALLOWLIST}
