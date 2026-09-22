@@ -1,5 +1,5 @@
 {
-  "_note": "synthetic: true. ADR-0003 §5.1 (a) payload_sha256 —— 纯业务列 Arrow 表的确定性 Parquet 序列化 sha256，不含 ADR-0002 provenance 列。content_sha256（(b)）每次运行不同，只记录不比较，不写在这里。",
+  "_note": "synthetic: true. QNT-40：payload_sha256 因 bench_gen 改用 quantime_core.detmath.exp（跨 CPU 逐位确定性）而更新一次，旧值 0afd88ee…59615259 只在无 AVX-512 的 runner 上成立。ADR-0003 §5.1 (a) payload_sha256 —— 纯业务列 Arrow 表的确定性 Parquet 序列化 sha256，不含 ADR-0002 provenance 列。content_sha256（(b)）每次运行不同，只记录不比较，不写在这里。",
   "generator": "fixtures/bench/bench_gen.py",
   "params": {
     "seed": 20260920,
@@ -20,5 +20,5 @@
     "row_group_size": 122880,
     "write_statistics": false
   },
-  "payload_sha256": "0afd88eed292ef0d48df570c5a7110d3eb7f0d51b5b3fb2263b6a56059615259"
+  "payload_sha256": "5173b44ae98b8cdcfe1867487e77155a5390bfad14e414c8a40901a5e36da7dd"
 }
