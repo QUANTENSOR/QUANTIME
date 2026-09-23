@@ -2,7 +2,7 @@
 
 ## 1. 产品与权威
 
-quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究系统；**第一阶段只做 research / 回测，不交易**。**quantime 是产品；可重放的研究结论（数据快照 + 代码 commit + 报告）是它的产物。** 设计权威：`docs/adr/`（ADR，状态 PROPOSED 的条目是草案，不是许可）；调研事实：`docs/research/`；任务真相源是 Multica issue，代码真相源是 GitHub PR，聊天不算数。
+quantime 是美股 + 美股期权 + 加密（研究为主）+ A 股（数据与因子研究，不涉交易）、日线为主的量化研究系统；**第一阶段只做 research / 回测，不交易**。**quantime 是产品；可重放的研究结论（数据快照 + 代码 commit + 报告）是它的产物。** 设计权威：`docs/adr/`（ADR，状态 PROPOSED 的条目是草案，不是许可）；调研事实：`docs/research/`；任务真相源是 Multica issue，代码真相源是 GitHub PR，聊天不算数。
 
 ## 2. Map
 
@@ -19,14 +19,14 @@ quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究�
 
 ## 4. 模型路由（长期版）
 
-全部模型调用经 Bifrost 网关：Anthropic 走 `/anthropic` 前缀，其余走 `/v1`；base URL 与 key 由 `op` 注入，不写进仓库。模型 id 按 runtime 写法：Claude Code 用 `claude-fable-5-1` / `claude-opus-5`；Pi 用 `bifrost/xai/grok-4.6`；Codex 用 `foundry/gpt-6-astra`。`bifrost/` 前缀只对 pi 有效。
+全部模型调用经 Bifrost 网关：Anthropic 走 `/anthropic` 前缀，其余走 `/v1`；base URL 与 key 由 `op` 注入，不写进仓库。模型 id 按 runtime 写法：Claude Code 用 `claude-fable-5-1` / `claude-opus-5-5`；Pi 用 `bifrost/xai/grok-4.7`；Codex 用 `foundry/gpt-6-astra`。`bifrost/` 前缀只对 pi 有效。
 
 | 角色 | 模型 / 运行时 | 职责与边界 |
 |---|---|---|
 | planner | Claude Fable 5.1 / Claude Code | 规划、拆卡、集成、写 ADR；建卡时判定难度，需要时给卡打 `hard` 标签 |
 | implementer · `hard` | Claude Fable 5.1 / Claude Code | 仅 planner 打了 `hard` 标签的卡 |
-| implementer · 关键路径 | Claude Opus 5 / Claude Code | 数据库迁移 · 算法与评分 · 认证与安全边界 · 外部接入与凭据 · systemd 与基础设施 |
-| implementer · 其余 | Grok 4.6 / pi | UI、文档、测试补强、脚本、demo |
+| implementer · 关键路径 | Claude Opus 5.5 / Claude Code | 数据库迁移 · 算法与评分 · 认证与安全边界 · 外部接入与凭据 · systemd 与基础设施 |
+| implementer · 其余 | Grok 4.7 / pi | UI、文档、测试补强、脚本、demo |
 | verify | GPT-6 Astra / Codex | 一律跨家族审查；同族审自家产物不算数 |
 
 规则：

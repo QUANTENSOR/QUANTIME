@@ -14,6 +14,8 @@
 - **许可证口径**：SPDX 取 GitHub License API `license.spdx_id`；返回 `NOASSERTION` 的四个仓库（OpenBB / vectorbt / MinerU / Zotero）已逐个读取许可证正文，结论见 §7。**SPDX 字段不是法律意见**；§7 标红项在后续卡中不得引入其代码。
 - 技术栈契合点对照基线：Python ≥3.14 / uv / DuckDB+Parquet / numpy / FastAPI / React+TS + Lightweight Charts（planner 2026-09-20 04:00 派发评论）。**"Python 3.14 可用"一律以 PyPI `requires_python` + classifier + 是否有 cp314 wheel 判定**，未实际安装验证 → 标"未实测"。
 
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——许可口径见 ADR-0003 §9.6 编者说明：本项目为个人研究、不分发，GPL/AGPL/Commons Clause 均可使用；本文 §7 排除口径不再作为后续卡约束。§7 正文不改。
+
 ## 0. 结论速览
 
 | # | 结论 | 依据 |
