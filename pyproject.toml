@@ -30,6 +30,9 @@ dev = [
     # httpx 自己的 URL 规范化 + MockTransport 离线证明「白名单外的路径发不出去」
     # （verify-a R1 P1-2）。用假的 URL 解析器证不了这件事：被绕过的正是真实解析。
     "httpx>=0.28",
+    # QNT-47 阶段 2：同理，用真 botocore 的事件链离线证明「S3 写/删/他桶发不出去」
+    # （Stubber 兜底，不出网）。
+    "boto3>=1.40",
 ]
 
 [tool.pytest.ini_options]
@@ -57,4 +60,6 @@ layers = ["quantime_data", "quantime_core"]
 name = "ADR-0003 §3.3 core 不得 import 任何网络客户端"
 type = "forbidden"
 source_modules = ["quantime_core"]
-forbidden_modules = ["httpx", "websockets", "requests", "urllib", "http", "socket"]
+forbidden_modules = [
+    "httpx", "websockets", "requests", "urllib", "http", "socket", "boto3", "botocore",
+]

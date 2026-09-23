@@ -75,12 +75,13 @@ KEYED_READONLY_PATHS: frozenset[str] = frozenset(
         "/v3/reference/options/contracts",  # 期权合约参考
         "/stocks/v1/splits",  # 拆股
         "/stocks/v1/dividends",  # 分红
+        "/v3/reference/tickers",  # ticker 全表（阶段 2，含 active=false）
     }
 )
 
 #: 放行的**参数化**路径模板（整条路径锚定匹配，逐段限定字符集）。
 #:
-#: 只有日线聚合需要模板：`/v2/aggs/ticker/<ticker>/range/1/day/<from>/<to>`。
+#: 日线聚合需要模板：`/v2/aggs/ticker/<ticker>/range/1/day/<from>/<to>`。
 #: `multiplier` 固定 `1`、`timespan` 固定 `day`——本卡只做日线，把它们写死而不是放开成
 #: `[0-9]+/[a-z]+`，等于把「不小心拉了分钟线」这件事挡在出口上。
 #: 收尾用 `\Z` 而非 `$`（`$` 会放过结尾换行，见 `sources/massive.py` 同处注释）。
@@ -92,6 +93,12 @@ KEYED_READONLY_PATH_TEMPLATES: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?:[A-Z][A-Z0-9.]{0,15}|O:[A-Z][A-Z0-9]{0,5}[0-9]{6}[CP][0-9]{8})"
             r"/range/1/day/[0-9]{4}-[0-9]{2}-[0-9]{2}/[0-9]{4}-[0-9]{2}-[0-9]{2}\Z"
         ),
+    ),
+    # 阶段 2：ticker 变更事件。`{id}` 上游接受 ticker / CUSIP / FIGI，本出口只放 composite
+    # FIGI（`BBG` + 9 位）——ticker 会被复用，FIGI 不会（见 `sources/massive.py` 同段）。
+    (
+        "/vX/reference/tickers/{figi}/events",
+        re.compile(r"^/vX/reference/tickers/BBG[0-9A-Z]{9}/events\Z"),
     ),
 )
 
@@ -267,6 +274,28 @@ def assert_keyed_readonly_url(url: str) -> HostEntry:
     return gate_keyed_url(url)[0]
 
 
+def assert_bearer_headers(headers: dict[str, str]) -> None:
+    """凭据闸的发出侧：请求头里必须有非空 `Authorization: Bearer <key>`。
+
+    没有它的请求**不发出**——上游对无 key 请求回 401 固然也会失败，但「靠远端拒绝」
+    意味着请求已经离开本机；这里让「忘了带头」在本地就炸（QNT-47 阶段 2 变异点）。
+    错误信息不回显任何头的值。
+    """
+    lowered = {k.lower(): v for k, v in headers.items()}
+    value = lowered.get("authorization")
+    if value is None or not value.startswith("Bearer ") or not value[len("Bearer ") :].strip():
+        raise CredentialUnavailableError(
+            "请求缺少 Authorization: Bearer 凭据头，拒绝发出（key 只走请求头，无匿名回退）"
+        )
+
+
+def check_keyed_outgoing(url: str, headers: dict[str, str]) -> str:
+    """发出前的最后一道：URL 两道闸 + Bearer 头。返回可回显形态。CLI 对规范化后的 URL 调它。"""
+    _, shown = gate_keyed_url(url)
+    assert_bearer_headers(headers)
+    return shown
+
+
 class KeyedTransport(Throttled):
     """需 key 的只读 HTTP 出口：逐请求三道闸 + 节流退避（退避实现复用 `Throttled`）。
 
@@ -308,6 +337,7 @@ class KeyedTransport(Throttled):
         重试用尽抛 `RateLimitedError`，404 抛 `FileNotFoundError`——绝不静默返回空。
         """
         request = self.build_request(url)
+        check_keyed_outgoing(request.url, request.headers)
         log.debug("keyed GET %s", request.shown)
         body = self._request(
             request.shown, lambda: self._opener(request.url, dict(request.headers))

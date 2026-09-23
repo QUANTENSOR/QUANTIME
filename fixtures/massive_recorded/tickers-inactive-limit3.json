@@ -1,0 +1,44 @@
+{
+  "count": 3,
+  "next_url": "https://api.massive.com/v3/reference/tickers?cursor=YWN0aXZlPWZhbHNlJmFwPSU1QiUyMkFBQkMlMjIlMkMlMjIyMDA2LTAxLTA0JTIyJTVEJmFzPSU1QiUyMkFBQkMwMDAxMDI0MDE1JTIyJTVEJmxpbWl0PTMmbWFya2V0PXN0b2NrcyZzb3J0PXRpY2tlcg",
+  "results": [
+    {
+      "active": false,
+      "currency_name": "usd",
+      "delisted_utc": "2008-02-11T05:00:00Z",
+      "last_updated_utc": "2025-01-16T17:32:57.087334Z",
+      "locale": "us",
+      "market": "stocks",
+      "name": "LEHMAN BROTHERS CURRENCY BASKET WTS EXP 2/13/2008",
+      "primary_exchange": "XASE",
+      "ticker": "AAB.WS"
+    },
+    {
+      "active": false,
+      "cik": "0001011006",
+      "composite_figi": "BBG000KB2D74",
+      "currency_name": "usd",
+      "delisted_utc": "2019-10-07T04:00:00Z",
+      "last_updated_utc": "2024-12-03T21:33:22.821052Z",
+      "locale": "us",
+      "market": "stocks",
+      "name": "Altaba Inc. Common Stock",
+      "primary_exchange": "XNAS",
+      "share_class_figi": "BBG001S8V781",
+      "ticker": "AABA",
+      "type": "CS"
+    },
+    {
+      "active": false,
+      "cik": "0001024015",
+      "currency_name": "usd",
+      "delisted_utc": "2006-01-04T05:00:00Z",
+      "last_updated_utc": "2025-08-12T16:27:08.260299Z",
+      "locale": "us",
+      "market": "stocks",
+      "name": "ACCESS ANYTIME BANCORP INC",
+      "ticker": "AABC"
+    }
+  ],
+  "status": "OK"
+}

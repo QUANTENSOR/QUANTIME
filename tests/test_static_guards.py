@@ -77,10 +77,10 @@ def _is_comment(hit: str) -> bool:
 #: allowlist 里登记过的 API host 字面量（ERE）。凡是能当出网目标用的 host，
 #: 都只许出现在 `core/allowlist.py` 一处。
 #:
-#: 刻意只匹配 `api.` 开头的那几个，而不是整个 `massive\.com`：`https://massive.com/docs/…`
+#: 刻意只匹配 `api.` / `files.` 开头的那几个，而不是整个 `massive\.com`：`https://massive.com/docs/…`
 #: 与 `https://massive.com/legal/…` 是**文档与条款链接**，不是出网目标，适配器的文档头必须
 #: 能引用它们（crypto-boundaries ① 反而要求附官方文档链接）。
-ALLOWLISTED_HOST_PATTERN = r"binance\.vision|api\.massive\.com|api\.polygon\.io"
+ALLOWLISTED_HOST_PATTERN = r"binance\.vision|api\.massive\.com|api\.polygon\.io|files\.massive\.com"
 
 
 def test_allowlist_is_the_only_file_with_allowlisted_host_literals():
@@ -97,7 +97,7 @@ def test_the_allowlist_really_holds_those_literals():
     """反证：上一条不是空集通过——allowlist.py 里每个 host 家族都确实有字面量。"""
     hits = _grep(ALLOWLISTED_HOST_PATTERN, PACKAGES / "core" / "quantime_core" / "allowlist.py")
     assert hits, "allowlist.py 里没有 host 字面量 —— 泄漏测试成了空集通过"
-    for family in ("binance.vision", "api.massive.com", "api.polygon.io"):
+    for family in ("binance.vision", "api.massive.com", "api.polygon.io", "files.massive.com"):
         assert any(family in h for h in hits), f"allowlist 里缺 {family}"
 
 
@@ -209,6 +209,10 @@ def test_fixtures_are_synthetic_only_and_generated_artifacts_not_committed():
 #: 离线重放外部接入必须用真实响应的录制，否则测的是我们自己编的格式。
 NON_SYNTHETIC_FIXTURE_DIRS = {
     "binance_public": "QNT-28：Binance 公开归档的真实响应录制，供离线集成测试重放",
+    "massive_recorded": (
+        "QNT-47 阶段 2：Massive 真实响应脱敏录制（REST 正文去 request_id；"
+        "day_aggs 仅取前 100 行），MANIFEST 标 synthetic: false"
+    ),
 }
 
 
@@ -250,6 +254,31 @@ def test_the_massive_fixtures_declare_their_doc_provenance():
         assert entry["doc_url"].startswith("https://"), entry["file"]
         assert entry["endpoint"], entry["file"]
         json.loads((d / entry["file"]).read_text(encoding="utf-8"))  # 必须是合法 JSON
+
+
+def test_the_massive_recordings_declare_their_provenance_and_carry_no_key():
+    """Massive 录制件是**手工一次性**脱敏录下的（owner 凭据，不留录制脚本以免被当成可跑入口）。
+
+    能核对的是：URL（https、无 apiKey）+ sha256 + 尺寸；目录内容与 MANIFEST 一一对应。
+    """
+    import hashlib
+    import json
+
+    d = REPO / "fixtures" / "massive_recorded"
+    manifest = json.loads((d / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["synthetic"] is False, "录制件必须显式标 synthetic: false"
+    assert manifest["recorded_at"], "缺录制日期"
+    on_disk = {f.name for f in d.iterdir() if f.is_file()} - {"MANIFEST.json"}
+    assert {e["file"] for e in manifest["files"]} == on_disk, "MANIFEST 与目录内容不一致"
+    for entry in manifest["files"]:
+        payload = (d / entry["file"]).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == entry["sha256"], entry["file"]
+        assert len(payload) == entry["size"], entry["file"]
+        assert entry["url"].startswith("https://"), entry["url"]
+        assert "apikey" not in entry["url"].lower(), entry["url"]
+        assert entry["sanitized"], entry["file"]
+        assert b"request_id" not in payload, f"{entry['file']} 未去 request_id"
+        assert b"apiKey" not in payload, f"{entry['file']} 含 apiKey"
 
 
 def test_only_the_declared_fixture_dir_holds_non_synthetic_data():
@@ -424,7 +453,7 @@ def test_network_clients_appear_only_in_the_ingest_cli():
     # urllib.parse 是纯字符串解析、不出网，所以按子模块匹配而不是整个 urllib。
     pattern = (
         r"^\s*(import|from)\s+"
-        r"(httpx|requests|websockets|socket|urllib\.request|http\.client)\b"
+        r"(httpx|requests|websockets|socket|urllib\.request|http\.client|boto3|botocore|aiobotocore)\b"
     )
     files = {_relpath(h) for h in _non_test_hits(_grep(pattern, PACKAGES))}
     assert files <= {NETWORK_EGRESS_FILE}, f"网络客户端泄漏到: {sorted(files)}"
@@ -434,6 +463,8 @@ def test_the_ingest_cli_really_is_the_egress():
     """反证：上一条不是空集通过——CLI 里确实有那个 import。"""
     hits = _grep(r"import httpx", PACKAGES / "data" / "quantime_data" / "cli.py")
     assert hits, "cli.py 里没有 httpx —— 出网收敛测试成了空集通过"
+    hits = _grep(r"import boto3", PACKAGES / "data" / "quantime_data" / "cli.py")
+    assert hits, "cli.py 里没有 boto3 —— Flat Files 出口收敛测试成了空集通过"
 
 
 def test_no_trading_or_account_endpoint_literals_in_packages():

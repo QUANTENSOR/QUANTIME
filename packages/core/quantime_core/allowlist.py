@@ -114,11 +114,23 @@ MASSIVE_REST_LEGACY = HostEntry(
     doc_url="https://massive.com/blog/polygon-is-now-massive",
 )
 
+#: Massive Flat Files（S3 兼容端点，SigV4，region us-east-1，bucket `flatfiles`）。QNT-47 阶段 2
+#: 只读取 `us_stocks_sip/day_aggs_v1/`；客户端层只放行 ListObjectsV2 / GetObject（见
+#: `data/flatfiles.py`）。凭据（Access Key ID / Secret）只经 `op run` 注入。
+MASSIVE_FLATFILES = HostEntry(
+    host="files.massive.com",
+    public_readonly=False,
+    credentialed_readonly=True,
+    exchange="massive",
+    doc_url="https://massive.com/docs/flat-files/stocks/day-aggregates",
+)
+
 ALLOWLIST: tuple[HostEntry, ...] = (
     BINANCE_VISION_ARCHIVE,
     BINANCE_VISION_SPOT_MIRROR,
     MASSIVE_REST,
     MASSIVE_REST_LEGACY,
+    MASSIVE_FLATFILES,
 )
 
 _BY_HOST: dict[str, HostEntry] = {entry.host: entry for entry in ALLOWLIST}

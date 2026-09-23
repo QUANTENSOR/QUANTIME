@@ -97,6 +97,7 @@ import datetime as dt
 import json
 import re
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pyarrow as pa
 from quantime_core.allowlist import MASSIVE_REST, MASSIVE_REST_LEGACY
@@ -117,7 +118,7 @@ SOURCE_VERSION = "massive-rest-2026-09-23"
 
 #: 凭据来源（**不是** 1Password 引用字面量，只是一个指针串；真正的引用在
 #: `docs/ops/massive.env.tpl` 里，由 `op run --env-file=...` 注入 `MASSIVE_API_KEY`）。
-CREDENTIAL_POINTER = "op:quant-dev/Massive/credential"
+CREDENTIAL_POINTER = "op:quant-dev/Massive Quantime API/credential"
 
 #: 免费 / Basic 档对未订阅资产类的限速：5 请求/分钟 → 两次请求至少隔 12 秒。
 FREE_TIER_MIN_INTERVAL = 12.0
@@ -649,3 +650,454 @@ TIME_COLUMN: dict[str, str] = {
 #: `meta/trading_calendar`（ADR-0003 §4.1），属公共层；本卡不在源里伪造一个等距假设。
 #: → PR 描述「偏离项」记一条。
 FREQ_STEP: dict[str, dt.timedelta | None] = {"1d": None}
+
+
+# =========================================================================== 阶段 2：参考数据
+#
+# QNT-47 阶段 2（owner 裁决 2026-09-23，Stocks Starter）：全量 ticker（含 `active=false`）、
+# 全市场拆股 / 分红、ticker 变更事件。落 `meta/instrument_meta`、`meta/adjust_factor`、
+# `meta/ticker_events`，`source='massive_rest'`（与阶段 1 的 `massive` 分开：阶段 1 是按标的的
+# 单源适配，阶段 2 是全市场参考数据，两者可各自按源 drop）。
+#
+# 端点以官方文档为准（与卡面不同处已在 PR 描述「文档矛盾」列出）：
+#
+# - ticker 全表 `GET /v3/reference/tickers`
+#   <https://massive.com/docs/rest/stocks/tickers/all-tickers>
+# - 拆股 `GET /stocks/v1/splits`
+#   <https://massive.com/docs/rest/stocks/corporate-actions/splits>
+# - 分红 `GET /stocks/v1/dividends`
+#   <https://massive.com/docs/rest/stocks/corporate-actions/dividends>
+# - ticker 事件 `GET /vX/reference/tickers/{id}/events`
+#   <https://massive.com/docs/rest/stocks/corporate-actions/ticker-events>
+#
+# 卡面写的 `/v3/reference/splits`、`/v3/reference/dividends` 在现行文档里已标 deprecated，
+# 改用 `/stocks/v1/*`。ticker 事件端点带 `vX`（实验性），文档未给分页；`{id}` 接受 ticker、
+# CUSIP 或 composite FIGI——本卡**只用 composite FIGI**：ticker 会被复用（同一代码先后指向
+# 不同公司），FIGI 不会，且 FIGI 的字符集（`BBG` + 9 位大写字母数字）可以在路径闸里写死。
+
+_NEW_YORK = ZoneInfo("America/New_York")
+
+#: 阶段 2 REST 参考数据的 source。
+REST_SOURCE = "massive_rest"
+REST_SOURCE_VERSION = "massive-rest-reference-2026-09-23"
+
+#: `/v3/reference/tickers` 的分页上限（文档：max 1000）。
+TICKERS_LIMIT = 1000
+
+#: composite FIGI 形态（OpenFIGI：`BBG` + 9 位 `[0-9A-Z]`）。
+_FIGI_RE = re.compile(r"^BBG[0-9A-Z]{9}\Z")
+
+
+def assert_figi(figi: str) -> str:
+    if not isinstance(figi, str) or _FIGI_RE.fullmatch(figi) is None:
+        raise SourceFormatError(f"非法 composite FIGI: {figi!r}")
+    return figi
+
+
+def tickers_url(*, active: bool, market: str = "stocks") -> str:
+    """ticker 全表的第一页（按 ticker 升序）。后续页走响应里的 `next_url`（必须再过闸）。"""
+    if market not in ("stocks", "otc"):
+        raise ValueError(f"market 只接受 stocks/otc: {market!r}")
+    query = [
+        f"market={market}",
+        f"active={'true' if active else 'false'}",
+        "order=asc",
+        "sort=ticker",
+        f"limit={TICKERS_LIMIT}",
+    ]
+    return f"{REST_BASE}/v3/reference/tickers?{'&'.join(query)}"
+
+
+def all_splits_url(*, start: dt.date | str | None = None, end: dt.date | str | None = None) -> str:
+    """全市场拆股（不按 ticker 过滤）。给 `start`/`end` 即按 `execution_date` 限区间。"""
+    query = ["sort=execution_date.asc", f"limit={STOCKS_V1_LIMIT}"]
+    if start is not None:
+        query.append(f"execution_date.gte={_assert_iso_date(start, field='start')}")
+    if end is not None:
+        query.append(f"execution_date.lte={_assert_iso_date(end, field='end')}")
+    return f"{REST_BASE}/stocks/v1/splits?{'&'.join(query)}"
+
+
+def all_dividends_url(
+    *, start: dt.date | str | None = None, end: dt.date | str | None = None
+) -> str:
+    """全市场分红。给 `start`/`end` 即按 `ex_dividend_date` 限区间。"""
+    query = ["sort=ex_dividend_date.asc", f"limit={STOCKS_V1_LIMIT}"]
+    if start is not None:
+        query.append(f"ex_dividend_date.gte={_assert_iso_date(start, field='start')}")
+    if end is not None:
+        query.append(f"ex_dividend_date.lte={_assert_iso_date(end, field='end')}")
+    return f"{REST_BASE}/stocks/v1/dividends?{'&'.join(query)}"
+
+
+def ticker_events_url(figi: str) -> str:
+    """某 composite FIGI 的 ticker 变更事件（只取 `ticker_change`）。"""
+    return f"{REST_BASE}/vX/reference/tickers/{assert_figi(figi)}/events?types=ticker_change"
+
+
+# --------------------------------------------------------------------------- instrument_id
+
+
+def instrument_id_for(
+    *, composite_figi: str | None, ticker: str, delisted: dt.date | None
+) -> tuple[str, str]:
+    """`(instrument_id, 规则名)`。稳定、不复用、可解释（QNT-26 §3.2）。
+
+    - 有 composite FIGI → `us:figi:<FIGI>`（`figi`）。FIGI 由 OpenFIGI 分配且不复用。
+    - 没有 FIGI 的已退市代码 → `us:ticker:<T>:delisted=<date>`（`ticker_delisted`）：
+      同一代码可能先后属于不同公司，退市日把它们区分开。
+    - 没有 FIGI 的在市代码 → `us:ticker:<T>:active`（`ticker_active`）。它**不是**永久 id：
+      将来退市后同一实体会以 `…:delisted=<date>` 出现为新行——这是版本化表的新行，
+      不是对旧行的改写（ADR-0002）。规则名随行落盘，下游据此判断能否跨批次关联。
+    """
+    if composite_figi:
+        return f"us:figi:{assert_figi(composite_figi)}", "figi"
+    if delisted is not None:
+        return f"us:ticker:{ticker}:delisted={delisted.isoformat()}", "ticker_delisted"
+    return f"us:ticker:{ticker}:active", "ticker_active"
+
+
+def _opt_utc(row: dict[str, Any], key: str) -> dt.datetime | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise SourceFormatError(f"{key} 不是 ISO 时间: {value!r}") from exc
+    if parsed.tzinfo is None:
+        raise SourceFormatError(f"{key} 无时区: {value!r}")
+    return parsed.astimezone(dt.UTC)
+
+
+#: ETF 类 `type` 取值（Massive ticker types：ETF / ETN / ETV / ETS）。其余按 equity。
+_ETF_TYPES: frozenset[str] = frozenset({"ETF", "ETN", "ETV", "ETS"})
+
+#: `meta/instrument_meta`（QNT-26 §3.2 列 + Massive 原始参考字段）。§3.2 规定的列在前，
+#: 上游原样字段在后——前者是跨市场口径，后者保留以便重算与核对（不做任何推断）。
+INSTRUMENT_META_SCHEMA = pa.schema(
+    [
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("instrument_id_rule", pa.string(), nullable=False),
+        pa.field("market", pa.string(), nullable=False),
+        pa.field("asset_class", pa.string(), nullable=False),
+        pa.field("symbol", pa.string(), nullable=False),
+        pa.field("symbol_kind", pa.string(), nullable=False),
+        pa.field("effective_from", pa.date32(), nullable=True),
+        pa.field("effective_to", pa.date32(), nullable=True),
+        pa.field("multiplier", pa.float64(), nullable=False),
+        pa.field("multiplier_unit", pa.string(), nullable=False),
+        pa.field("tick_size", pa.float64(), nullable=True),
+        pa.field("tick_rule_ref", pa.string(), nullable=True),
+        pa.field("price_limit_kind", pa.string(), nullable=False),
+        pa.field("price_limit_params", pa.string(), nullable=True),
+        pa.field("settlement_kind", pa.string(), nullable=True),
+        pa.field("exercise_style", pa.string(), nullable=True),
+        pa.field("expiry_rule", pa.string(), nullable=True),
+        pa.field("underlying_id", pa.string(), nullable=True),
+        pa.field("calendar_id", pa.string(), nullable=True),
+        # ---- Massive 原样字段 ----
+        pa.field("name", pa.string(), nullable=True),
+        pa.field("active", pa.bool_(), nullable=False),
+        pa.field("ticker_type", pa.string(), nullable=True),
+        pa.field("upstream_market", pa.string(), nullable=False),
+        pa.field("locale", pa.string(), nullable=True),
+        pa.field("primary_exchange", pa.string(), nullable=True),
+        pa.field("currency_name", pa.string(), nullable=True),
+        pa.field("cik", pa.string(), nullable=True),
+        pa.field("composite_figi", pa.string(), nullable=True),
+        pa.field("share_class_figi", pa.string(), nullable=True),
+        pa.field("last_updated_utc", pa.timestamp("us", tz="UTC"), nullable=True),
+        pa.field("delisted_utc", pa.timestamp("us", tz="UTC"), nullable=True),
+    ]
+)
+
+
+def normalize_tickers(payload: bytes, *, active: bool) -> pa.Table:
+    """ticker 全表的一页 → `instrument_meta` 行（按 ticker 升序）。
+
+    `effective_from` 记 null：列表端点不返回上市日（`list_date` 只在单 ticker 详情端点里），
+    本卡不为 5 万个代码逐个调详情——宁可空着也不拿 `last_updated_utc` 冒充。
+    `effective_to` 取 `delisted_utc` 的纽约日期部分（上游以 UTC 表示当日 04:00/05:00，
+    即纽约午夜）。`tick_size` / `tick_rule_ref` 留空：美股 tick 规则（Reg NMS 612，
+    2025-11-03 起分档）属规则表，不是逐代码的上游字段。
+    """
+    where = f"tickers(active={active})"
+    parsed: list[dict[str, Any]] = []
+    for row in _results(payload):
+        ticker = _need(row, "ticker", str, where)
+        if not ticker or ticker != ticker.strip():
+            raise SourceFormatError(f"{where}: ticker 为空或含空白: {ticker!r}")
+        got_active = _need(row, "active", bool, where)
+        if got_active is not active:
+            raise SourceFormatError(f"{where}: {ticker} 的 active={got_active}，与请求不符")
+        delisted_utc = _opt_utc(row, "delisted_utc")
+        delisted = delisted_utc.astimezone(_NEW_YORK).date() if delisted_utc else None
+        figi = _opt_str(row, "composite_figi") or None
+        if figi is not None and _FIGI_RE.fullmatch(figi) is None:
+            figi = None  # 上游偶有非 FIGI 值：不拿它当主键，退回 ticker 规则
+        instrument_id, rule = instrument_id_for(
+            composite_figi=figi, ticker=ticker, delisted=delisted
+        )
+        ticker_type = _opt_str(row, "type")
+        parsed.append(
+            {
+                "instrument_id": instrument_id,
+                "instrument_id_rule": rule,
+                "market": "us",
+                "asset_class": "etf" if ticker_type in _ETF_TYPES else "equity",
+                "symbol": ticker,
+                "symbol_kind": "ticker",
+                "effective_from": None,
+                "effective_to": delisted,
+                "multiplier": 1.0,
+                "multiplier_unit": "shares",
+                "tick_size": None,
+                "tick_rule_ref": None,
+                "price_limit_kind": "luld",
+                "price_limit_params": None,
+                "settlement_kind": "physical",
+                "exercise_style": None,
+                "expiry_rule": None,
+                "underlying_id": None,
+                "calendar_id": None,
+                "name": _opt_str(row, "name"),
+                "active": got_active,
+                "ticker_type": ticker_type,
+                "upstream_market": _need(row, "market", str, where),
+                "locale": _opt_str(row, "locale"),
+                "primary_exchange": _opt_str(row, "primary_exchange"),
+                "currency_name": _opt_str(row, "currency_name"),
+                "cik": _opt_str(row, "cik"),
+                "composite_figi": _opt_str(row, "composite_figi"),
+                "share_class_figi": _opt_str(row, "share_class_figi"),
+                "last_updated_utc": _opt_utc(row, "last_updated_utc"),
+                "delisted_utc": delisted_utc,
+            }
+        )
+    parsed.sort(key=lambda r: (r["symbol"], r["instrument_id"]))
+    columns = {name: [r[name] for r in parsed] for name in INSTRUMENT_META_SCHEMA.names}
+    return pa.Table.from_pydict(columns, schema=INSTRUMENT_META_SCHEMA)
+
+
+#: `meta/adjust_factor`（QNT-26 §3.3，**只存因子不存复权价**）+ 事件原始量。
+ADJUST_FACTOR_SCHEMA = pa.schema(
+    [
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("instrument_id_rule", pa.string(), nullable=False),
+        pa.field("ticker", pa.string(), nullable=False),
+        pa.field("ex_date", pa.date32(), nullable=False),
+        pa.field("adjust_kind", pa.string(), nullable=False),
+        pa.field("factor_kind", pa.string(), nullable=False),
+        pa.field("factor_value", pa.float64(), nullable=True),
+        pa.field("cash_amount", pa.float64(), nullable=True),
+        pa.field("share_ratio", pa.float64(), nullable=True),
+        pa.field("direction", pa.string(), nullable=False),
+        pa.field("nav_kind", pa.string(), nullable=True),
+        pa.field("disclosure_date", pa.date32(), nullable=True),
+        pa.field("adjustment_memo_ref", pa.string(), nullable=True),
+        # ---- Massive 原样字段 ----
+        pa.field("event_id", pa.string(), nullable=False),
+        pa.field("upstream_adjustment_type", pa.string(), nullable=True),
+        pa.field("upstream_historical_adjustment_factor", pa.float64(), nullable=True),
+        pa.field("split_from", pa.float64(), nullable=True),
+        pa.field("split_to", pa.float64(), nullable=True),
+        pa.field("currency", pa.string(), nullable=True),
+        pa.field("record_date", pa.date32(), nullable=True),
+        pa.field("pay_date", pa.date32(), nullable=True),
+        pa.field("frequency", pa.int64(), nullable=True),
+        pa.field("distribution_type", pa.string(), nullable=True),
+        pa.field("split_adjusted_cash_amount", pa.float64(), nullable=True),
+    ]
+)
+
+#: ticker → instrument_id 的解析器（由调用方用同一次运行的 ticker 全表构造）。
+TickerResolver = Any  # Callable[[str, dt.date], tuple[str, str]]
+
+
+def _fallback_resolver(ticker: str, _on: dt.date) -> tuple[str, str]:
+    return f"us:ticker:{ticker}", "ticker_unresolved"
+
+
+def _adjust_row(**overrides: Any) -> dict[str, Any]:
+    row: dict[str, Any] = dict.fromkeys(ADJUST_FACTOR_SCHEMA.names)
+    row.update(overrides)
+    return row
+
+
+def normalize_all_splits(payload: bytes, *, resolve: TickerResolver = None) -> pa.Table:
+    """全市场拆股一页 → `adjust_factor` 行。
+
+    `factor_value = split_from / split_to`：对 `ex_date` 之前的价格乘以它（前复权口径，
+    `direction='forward'`）。上游若给了 `historical_adjustment_factor` 原样另存一列——那是
+    **累积**因子，会随后续事件变化，不能当本事件的因子（只 insert 的湖里存它会过时）。
+    `adjustment_type='stock_dividend'` 记 `adjust_kind='stock_dividend'`，其余记 `split`。
+    """
+    resolve = resolve or _fallback_resolver
+    where = "拆股"
+    out = []
+    for row in _results(payload):
+        ticker = _need(row, "ticker", str, where)
+        ex_date = dt.date.fromisoformat(_need(row, "execution_date", str, where))
+        split_from = float(_need(row, "split_from", (int, float), where))
+        split_to = float(_need(row, "split_to", (int, float), where))
+        if split_from <= 0 or split_to <= 0:
+            raise SourceFormatError(
+                f"{where}: {ticker} {ex_date} 比例非正: {split_from}/{split_to}"
+            )
+        adj_type = _opt_str(row, "adjustment_type")
+        instrument_id, rule = resolve(ticker, ex_date)
+        out.append(
+            _adjust_row(
+                instrument_id=instrument_id,
+                instrument_id_rule=rule,
+                ticker=ticker,
+                ex_date=ex_date,
+                adjust_kind="stock_dividend" if adj_type == "stock_dividend" else "split",
+                factor_kind="ratio",
+                factor_value=split_from / split_to,
+                share_ratio=split_to / split_from,
+                direction="forward",
+                event_id=_need(row, "id", str, where),
+                upstream_adjustment_type=adj_type,
+                upstream_historical_adjustment_factor=_opt_float(
+                    row, "historical_adjustment_factor"
+                ),
+                split_from=split_from,
+                split_to=split_to,
+            )
+        )
+    out.sort(key=lambda r: (r["ex_date"], r["ticker"], r["event_id"]))
+    return pa.Table.from_pylist(out, schema=ADJUST_FACTOR_SCHEMA)
+
+
+def normalize_all_dividends(payload: bytes, *, resolve: TickerResolver = None) -> pa.Table:
+    """全市场分红一页 → `adjust_factor` 行（`adjust_kind='cash_dividend'`）。
+
+    `factor_value` 只在上游给了 `historical_adjustment_factor` 时才有值，否则 null：
+    现金分红的比例因子要用除息前一日收盘价算，那是**查询期**的派生量（QNT-26 §3.3：
+    只存因子与原始事件量，`cash_amount` 保留以便重算）。`disclosure_date` 记
+    `declaration_date`（公告日，信息集边界）。
+    """
+    resolve = resolve or _fallback_resolver
+    where = "分红"
+    out = []
+    for row in _results(payload):
+        ticker = _need(row, "ticker", str, where)
+        ex_date = dt.date.fromisoformat(_need(row, "ex_dividend_date", str, where))
+        instrument_id, rule = resolve(ticker, ex_date)
+        historical = _opt_float(row, "historical_adjustment_factor")
+        out.append(
+            _adjust_row(
+                instrument_id=instrument_id,
+                instrument_id_rule=rule,
+                ticker=ticker,
+                ex_date=ex_date,
+                adjust_kind="cash_dividend",
+                factor_kind="ratio",
+                factor_value=None,
+                cash_amount=float(_need(row, "cash_amount", (int, float), where)),
+                direction="forward",
+                disclosure_date=_opt_date(row, "declaration_date"),
+                event_id=_need(row, "id", str, where),
+                upstream_adjustment_type=_opt_str(row, "distribution_type"),
+                upstream_historical_adjustment_factor=historical,
+                currency=_opt_str(row, "currency"),
+                record_date=_opt_date(row, "record_date"),
+                pay_date=_opt_date(row, "pay_date"),
+                frequency=_opt_int(row, "frequency"),
+                distribution_type=_opt_str(row, "distribution_type"),
+                split_adjusted_cash_amount=_opt_float(row, "split_adjusted_cash_amount"),
+            )
+        )
+    out.sort(key=lambda r: (r["ex_date"], r["ticker"], r["event_id"]))
+    return pa.Table.from_pylist(out, schema=ADJUST_FACTOR_SCHEMA)
+
+
+#: `meta/ticker_events`（本卡新增 meta 表：只有 `ticker_change` 一类）。
+TICKER_EVENTS_SCHEMA = pa.schema(
+    [
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("composite_figi", pa.string(), nullable=False),
+        pa.field("cik", pa.string(), nullable=True),
+        pa.field("name", pa.string(), nullable=True),
+        pa.field("event_date", pa.date32(), nullable=False),
+        pa.field("event_type", pa.string(), nullable=False),
+        pa.field("ticker", pa.string(), nullable=False),
+    ]
+)
+
+
+def normalize_ticker_events(payload: bytes, *, figi: str) -> pa.Table:
+    """一个 FIGI 的事件 → `ticker_events` 行（按日期升序）。
+
+    `results` 是**对象**（不是数组）：`{name, composite_figi, cik, events:[…]}`。响应里的
+    `composite_figi` 必须等于请求的 FIGI；只收 `type='ticker_change'`，其余类型出现即拒绝
+    （我们请求时已按 `types=ticker_change` 过滤，出现别的说明上游口径变了）。
+    """
+    assert_figi(figi)
+    doc = _load(payload)
+    status = doc.get("status")
+    if status is not None and status not in OK_STATUSES:
+        raise SourceFormatError(f"ticker 事件 status={status!r}")
+    results = doc.get("results")
+    if not isinstance(results, dict):
+        raise SourceFormatError(f"ticker 事件 results 应为对象，得到 {type(results).__name__}")
+    where = f"{figi} ticker 事件"
+    got = _opt_str(results, "composite_figi")
+    if got is not None and got != figi:
+        raise SourceFormatError(f"{where}: 响应 FIGI {got!r} 与请求不符")
+    events = results.get("events") or []
+    if not isinstance(events, list):
+        raise SourceFormatError(f"{where}: events 应为数组")
+    out = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            raise SourceFormatError(f"{where}: 事件应为对象")
+        kind = _need(ev, "type", str, where)
+        if kind != "ticker_change":
+            raise SourceFormatError(f"{where}: 未请求的事件类型 {kind!r}")
+        change = _need(ev, "ticker_change", dict, where)
+        out.append(
+            {
+                "instrument_id": f"us:figi:{figi}",
+                "composite_figi": figi,
+                "cik": _opt_str(results, "cik"),
+                "name": _opt_str(results, "name"),
+                "event_date": dt.date.fromisoformat(_need(ev, "date", str, where)),
+                "event_type": kind,
+                "ticker": _need(change, "ticker", str, where),
+            }
+        )
+    out.sort(key=lambda r: (r["event_date"], r["ticker"]))
+    return pa.Table.from_pylist(out, schema=TICKER_EVENTS_SCHEMA)
+
+
+def ticker_resolver(instrument_meta: pa.Table):
+    """由 `instrument_meta` 行构造 `(ticker, on_date) -> (instrument_id, rule)`。
+
+    同一 ticker 可能对应多行（代码复用）：取 `on_date` 当天仍在市的那一行——在市行
+    （`effective_to` 为空）或 `effective_to >= on_date` 的退市行中，`effective_to` 最早者。
+    无匹配 → `us:ticker:<T>`（`ticker_unresolved`），规则名落盘，下游可识别。
+    """
+    by_ticker: dict[str, list[tuple[dt.date | None, str]]] = {}
+    for sym, to, iid in zip(
+        instrument_meta.column("symbol").to_pylist(),
+        instrument_meta.column("effective_to").to_pylist(),
+        instrument_meta.column("instrument_id").to_pylist(),
+        strict=True,
+    ):
+        by_ticker.setdefault(sym, []).append((to, iid))
+
+    def resolve(ticker: str, on: dt.date) -> tuple[str, str]:
+        candidates = [
+            (to or dt.date.max, iid)
+            for to, iid in by_ticker.get(ticker, [])
+            if to is None or to >= on
+        ]
+        if not candidates:
+            return _fallback_resolver(ticker, on)
+        return min(candidates)[1], "resolved_by_ticker"
+
+    return resolve

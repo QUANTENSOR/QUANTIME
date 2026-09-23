@@ -19,7 +19,7 @@ from quantime_core.allowlist import (
 #: 公共只读条目（无需 key）。
 PUBLIC_READONLY_HOSTS = {"data.binance.vision", "data-api.binance.vision"}
 #: 需 key 的只读数据条目（QNT-47 Massive，含 Polygon 旧域名）。
-KEYED_READONLY_HOSTS = {"api.massive.com", "api.polygon.io"}
+KEYED_READONLY_HOSTS = {"api.massive.com", "api.polygon.io", "files.massive.com"}
 
 
 def test_allowlist_holds_exactly_the_declared_hosts():

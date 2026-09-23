@@ -80,7 +80,7 @@ jobs:
           # 任何第二个 import 网络客户端的模块都可能绕过它们。
           # urllib.parse 是纯字符串解析、不出网，所以按子模块匹配而不是整个 urllib。
           deny "网络客户端只许出现在摄取 CLI 里" \
-            '^\s*(import|from)\s+(httpx|requests|websockets|socket|urllib\.request|http\.client)\b' \
+            '^\s*(import|from)\s+(httpx|requests|websockets|socket|urllib\.request|http\.client|boto3|botocore|aiobotocore)\b' \
             'quantime_data/cli\.py'
 
           # QNT-47：allowlist host 字面量归位。只有 allowlist.py 许写 host 字符串，其余模块
@@ -89,7 +89,7 @@ jobs:
           # 刻意只匹配 `api.` 开头的域：`https://massive.com/docs/…` 与 `/legal/…` 是文档与
           # 条款链接，不是出网目标，crypto-boundaries ① 反而要求适配器附上它们。
           deny "allowlist host 字面量只许出现在 core allowlist 模块里" \
-            'binance\.vision|api\.massive\.com|api\.polygon\.io' \
+            'binance\.vision|api\.massive\.com|api\.polygon\.io|files\.massive\.com' \
             'quantime_core/allowlist\.py'
 
           # QNT-47 / AGENTS.md §3：禁止手抄秘钥。值须 ≥21 字符且含小写字母，

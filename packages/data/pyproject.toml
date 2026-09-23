@@ -21,10 +21,14 @@ build-backend = "hatchling.build"
 # 摄取 CLI 的网络出口。只有 `quantime_data.cli` import 它，且只在函数体内。
 ingest = [
     "httpx>=0.28",
+    # QNT-47 阶段 2：Massive Flat Files（S3 兼容，SigV4）。只在 `cli.py` 的工厂函数体内
+    # import；只读封装与事件钩子在 `flatfiles.py`（只放行 ListObjectsV2 / GetObject）。
+    "boto3>=1.40",
 ]
 
 [project.scripts]
 quantime-ingest = "quantime_data.cli:main"
+quantime-ingest-us = "quantime_data.cli:main_us"
 
 [tool.hatch.build.targets.wheel]
 packages = ["quantime_data"]
