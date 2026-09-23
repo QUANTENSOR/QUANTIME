@@ -1,0 +1,29 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2109.10662
+arxiv_id: '2109.10662'
+categories:
+- q-fin.TR
+- q-fin.ST
+title: Evaluation of Dynamic Cointegration-Based Pairs Trading Strategy in the Cryptocurrency
+  Market
+authors:
+- Masood Tadi
+- Irina Kortchmeski
+year: 2021
+factor_name: dynamic cointegration pairs
+factor_definition: Engle-Granger / KSS / Johansen 检验选对，用 OU 半寿估计回看窗口；价差偏离均值则开仓、回归则平仓（动态协整配对）。
+family: pairs
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: 加密（摘要）
+  sample_period: 摘要未给
+  stats: 计入市场微观结构约束后仍优于朴素买入持有（摘要，无具体夏普数字）。
+reproducible: 'yes'
+reproducible_reason: 只需多币日线 close。Vision 现货 OHLCV 可做协整配对；原文最优窗口校准可在日线上重做。
+markets:
+- crypto
+url: https://arxiv.org/abs/2109.10662

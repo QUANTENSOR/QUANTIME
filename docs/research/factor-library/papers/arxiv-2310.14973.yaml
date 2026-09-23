@@ -1,0 +1,31 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2310.14973
+arxiv_id: '2310.14973'
+doi: 10.5195/ledger.2024.325
+categories:
+- q-fin.TR
+- q-fin.ST
+title: Reconciling Open Interest with Traded Volume in Perpetual Swaps
+authors:
+- Ioannis Giagkiozis
+- Emilio Said
+year: 2023
+factor_name: open interest as collateral lower bound
+factor_definition: OI 是时点未平仓合约存量，与成交量口径不同；累计各市场 OI 可作交易所抵押品需求下界，须与储备证明对照。因子用法：OI 水平/变化，不可直接用成交量替代。
+family: oi
+frequency: daily
+required_fields:
+- name: open_interest
+  frequency: daily
+- name: volume
+  frequency: daily
+original_findings:
+  sample_market: 加密永续（摘要）
+  sample_period: 摘要未给
+  stats: 摘要强调口径与抵押下界，未给 IC/分层收益数字。
+reproducible: 'yes'
+reproducible_reason: QNT-28 Vision metrics/OI 与成交量 K 线可对照「OI ≠ volume」；储备证明不在归档，本条只验收 OI/成交量口径。
+markets:
+- crypto
+url: https://arxiv.org/abs/2310.14973

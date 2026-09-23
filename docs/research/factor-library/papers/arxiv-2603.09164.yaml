@@ -1,0 +1,31 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2603.09164
+arxiv_id: '2603.09164'
+categories:
+- q-fin.RM
+title: 'Slippage-at-Risk (SaR): A Forward-Looking Liquidity Risk Framework for Perpetual Futures
+  Exchanges'
+authors:
+- Otar Sepper
+year: 2026
+factor_name: Slippage-at-Risk
+factor_definition: 由当前盘口微观结构前向估计强平滑点分位数 SaR(α)、尾部期望 ESaR、美元加总 TSaR，并按做市集中度惩罚脆弱流动性。
+family: liquidity
+frequency: intraday
+required_fields:
+- name: order_book
+  frequency: intraday
+- name: open_interest
+  frequency: intraday
+  optional: true
+original_findings:
+  sample_market: 永续交易所盘口
+  sample_period: n/a（框架）
+  stats: 摘要为指标定义，无历史回测数字。
+reproducible: 'no'
+reproducible_reason: 需要当前订单簿；Vision 的 bookDepth 前缀在调研中不作为 QNT-28 首批摄取，且日线 OHLCV/funding/OI
+  不够构造 SaR。
+markets:
+- crypto
+url: https://arxiv.org/abs/2603.09164

@@ -1,0 +1,29 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1706.10059
+arxiv_id: '1706.10059'
+categories:
+- q-fin.CP
+- cs.LG
+title: A Deep Reinforcement Learning Framework for the Financial Portfolio Management Problem
+authors:
+- Zhengyao Jiang
+- Dixing Xu
+- Jinjun Liang
+year: 2017
+factor_name: EIIE crypto portfolio weights
+factor_definition: 无模型 RL：EIIE 拓扑 + 组合向量记忆 + 在线随机批学习，直接输出各币权重；用 CNN/RNN/LSTM 实例化，奖励显式可算。
+family: other
+frequency: intraday
+required_fields:
+- name: ohlcv
+  frequency: intraday
+original_findings:
+  sample_market: 加密组合（摘要框架文）
+  sample_period: 摘要未给
+  stats: 摘要介绍框架，未给样本外夏普。
+reproducible: partial
+reproducible_reason: 权重网络可在 Vision 多币 OHLCV 上重训，但原文是高频组合再平衡，与 QNT-28 日线部分历史不完全同设定。
+markets:
+- crypto
+url: https://arxiv.org/abs/1706.10059

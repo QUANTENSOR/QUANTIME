@@ -1,0 +1,30 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w8462
+nber_id: w8462
+doi: 10.3386/w8462
+title: Liquidity Risk and Expected Stock Returns
+authors:
+- Lubos Pastor
+- Robert F. Stambaugh
+year: 2001
+factor_name: Pastor-Stambaugh liquidity beta
+factor_definition: 个股日度反转对订单流的敏感度代理非流动性，截面平均得市场流动性状态；股票收益对流动性冲击的 beta 高则预期收益高。
+family: liquidity
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: volume
+  frequency: daily
+- name: market_cap
+  frequency: daily
+original_findings:
+  sample_market: 美股，34 年
+  sample_period: 摘要写 34-year period，未给起止年
+  stats: 高流动性敏感相对低敏感，年化多空约 7.5%（已调市场/规模/价值/动量，摘要）。
+reproducible: 'yes'
+reproducible_reason: 日线收益、成交量与市值即可构造 PS 流动性状态与 beta（成交量视为 OHLCV 的 V）。待付费源。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w8462

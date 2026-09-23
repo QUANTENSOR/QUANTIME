@@ -1,0 +1,32 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2206.03386
+arxiv_id: '2206.03386'
+doi: 10.3390/e24111548
+categories:
+- q-fin.ST
+- q-fin.CP
+- q-fin.GN
+title: Dependency structures in cryptocurrency market from high to low frequency
+authors:
+- Antonio Briola
+- Tomaso Aste
+year: 2022
+factor_name: return-correlation network vs sampling frequency
+factor_definition: 在 15 秒到 1 日的对数收益上建 MST / TMFG，观察相关结构随采样变粗而增强、主流币枢纽角色切换。
+family: network
+frequency: mixed
+required_fields:
+- name: close
+  frequency: intraday
+- name: close_daily
+  frequency: daily
+original_findings:
+  sample_market: FTX 25 个流动加密币
+  sample_period: 摘要未给
+  stats: 更细采样相关更弱；日频出现更完整层级结构（摘要）。
+reproducible: partial
+reproducible_reason: 日频相关网可用 Vision 日线 OHLCV；15 秒腿需要逐笔/秒级，QNT-28 只取部分历史 K 线，高频结构不能按原文复现。
+markets:
+- crypto
+url: https://arxiv.org/abs/2206.03386

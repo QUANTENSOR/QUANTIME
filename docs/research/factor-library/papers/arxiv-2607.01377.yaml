@@ -1,0 +1,35 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2607.01377
+arxiv_id: '2607.01377'
+categories:
+- q-fin.PR
+- q-fin.TR
+title: Liquidity Premium and Investment Horizons
+authors:
+- Irene Aldridge
+year: 2026
+factor_name: Kyle lambda from daily order flow
+factor_definition: 用日度股票订单流估 Kyle λ：月内价格对净订单流回归，以及 Amihud 风格比率；检验其对后续截面收益的预测。
+family: liquidity
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: volume
+  frequency: daily
+- name: signed_order_flow
+  frequency: daily
+  optional: true
+- name: market_cap
+  frequency: daily
+original_findings:
+  sample_market: CRSP 美股 2020–2025
+  sample_period: 2020–2025
+  stats: 带符号订单流强预测当月与次月收益；成交量波动预测后续收益更低；Fama-MacBeth 确认订单流信号（摘要）。
+reproducible: 'yes'
+reproducible_reason: Amihud 风格 λ 可用日线 close/volume；带符号订单流若用日收益符号×成交量近似，则仍落在 OHLCV+市值。待付费源。真
+  tick 订单流不做。
+markets:
+- us_equity
+url: https://arxiv.org/abs/2607.01377

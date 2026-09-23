@@ -1,0 +1,34 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1507.00784
+arxiv_id: '1507.00784'
+categories:
+- q-fin.ST
+title: 'Twitter Sentiment Analysis Applied to Finance: A Case Study in the Retail Industry'
+authors:
+- Thársis Tuani Pinto Souza
+- Olga Kolchyna
+- Philip C. Treleaven
+- Tomaso Aste
+year: 2015
+factor_name: twitter sentiment vs retail returns
+factor_definition: 零售品牌推特情绪与推文量，对照股价收益与波动，并以传统新闻电线作对照。
+family: sentiment
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: twitter_sentiment
+  frequency: daily
+- name: newswire_sentiment
+  frequency: daily
+  optional: true
+original_findings:
+  sample_market: 上市零售品牌
+  sample_period: 摘要未给
+  stats: 社交媒体相对 WSJ/Dow Jones 新闻仍有增量信息（摘要）。
+reproducible: 'no'
+reproducible_reason: 需要推特与新闻情绪，不在日线 OHLCV+市值范围内。
+markets:
+- us_equity
+url: https://arxiv.org/abs/1507.00784

@@ -1,0 +1,32 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1009.3638
+arxiv_id: '1009.3638'
+categories:
+- q-fin.RM
+- q-fin.PM
+title: Scaling portfolio volatility and calculating risk contributions in the presence of
+  serial cross-correlations
+authors:
+- Nikolaus Rab
+- Richard Warnung
+year: 2010
+factor_name: sqrt-time vol scaling with serial cross-corr
+factor_definition: 若收盘时区导致资产间序列互相关，√T 规则失效，组合波动贡献也不能简单缩放；需把序列相关纳入持有期波动。
+family: volatility
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: market_cap
+  frequency: daily
+  optional: true
+original_findings:
+  sample_market: 跨时区交易的股票组合（摘要）
+  sample_period: 摘要未给
+  stats: 摘要为方法纠正，无定价 t 值。
+reproducible: 'yes'
+reproducible_reason: 日线收盘即可估计序列互相关并修正 √T。待付费源（美股日线）。
+markets:
+- us_equity
+url: https://arxiv.org/abs/1009.3638

@@ -1,0 +1,29 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w20433
+nber_id: w20433
+doi: 10.3386/w20433
+title: 'The Carry Trade: Risks and Drawdowns'
+authors:
+- Kent Daniel
+- Robert J. Hodrick
+- Zhongjin Lu
+year: 2014
+factor_name: G10 FX carry
+factor_definition: G10 利差货币：多高利率空低利率；动态利差加权与风险再平衡改善表现；美元中性 carry 异常收益不显著，美元暴露部分显著且偏度小。
+family: carry
+frequency: daily
+required_fields:
+- name: fx_spot
+  frequency: daily
+- name: interest_rate
+  frequency: daily
+original_findings:
+  sample_market: G10 外汇
+  sample_period: 摘要未给
+  stats: 股债汇波动与下行股票风险解释不了盈利；期权对冲降低但不消除异常收益（摘要）。
+reproducible: 'no'
+reproducible_reason: 需要 G10 即期与利率，不在 Vision 加密归档，也不在美股日线 OHLCV+市值。
+markets:
+- multi
+url: https://www.nber.org/papers/w20433

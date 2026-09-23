@@ -1,0 +1,32 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2506.08573
+arxiv_id: '2506.08573'
+categories:
+- q-fin.MF
+- q-fin.PR
+title: Designing funding rates for perpetual futures in cryptocurrency markets
+authors:
+- Jaehyun Kim
+- Hyungbin Park
+year: 2025
+factor_name: path-dependent funding design
+factor_definition: 适当设计资金费可使永续价与目标（通常现货）对齐；给出复制组合，并以路径依赖资金费作为可落地替代。理论工具是无穷期限路径依赖 BSDE。
+family: funding
+frequency: daily
+required_fields:
+- name: funding_rate
+  frequency: daily
+- name: spot_close
+  frequency: daily
+- name: perp_close
+  frequency: daily
+original_findings:
+  sample_market: 加密永续（理论+设计）
+  sample_period: n/a
+  stats: 摘要为存在唯一性结果，无样本统计。
+reproducible: 'yes'
+reproducible_reason: 「现行 Binance 资金费是否把标记价拉向现货」可用 Vision funding + OHLCV 检验；BSDE 最优设计本身不复现。
+markets:
+- crypto
+url: https://arxiv.org/abs/2506.08573

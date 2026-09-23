@@ -1,0 +1,29 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1904.00890
+arxiv_id: '1904.00890'
+categories:
+- q-fin.GN
+title: Momentum and liquidity in cryptocurrencies
+authors:
+- Stjepan Begušić
+- Zvonko Kostanjčar
+year: 2019
+factor_name: momentum-liquidity double sort
+factor_definition: 按动量与流动性二维排序、定期再平衡；摘要报告最流动币种动量强，并给出两个只做多策略：非流动输家、流动赢家。
+family: momentum
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: volume
+  frequency: daily
+original_findings:
+  sample_market: 加密现货截面，币种集合随时间变化（摘要）
+  sample_period: 摘要未给
+  stats: 最流动组动量强；两只只做多策略风险调整后优于市值加权（摘要，无 t 值）。
+reproducible: 'yes'
+reproducible_reason: 二维排序只需日线 close 与 volume（流动性代理）。Vision 现货 OHLCV 覆盖主流币，可在可得宇宙上复现；摘要未写形成期长度，需自选窗口并标注。
+markets:
+- crypto
+url: https://arxiv.org/abs/1904.00890

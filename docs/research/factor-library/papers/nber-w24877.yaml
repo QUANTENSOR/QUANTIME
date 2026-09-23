@@ -1,0 +1,30 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w24877
+nber_id: w24877
+doi: 10.3386/w24877
+title: Risks and Returns of Cryptocurrency
+authors:
+- Yukun Liu
+- Aleh Tsyvinski
+year: 2018
+factor_name: crypto time-series momentum
+factor_definition: 用币种自身滞后收益构造时间序列动量：过去一段形成期的累计收益为正则做多、为负则做空或减仓；摘要另列投资者关注代理作为预测变量，本条只转写动量腿。
+family: momentum
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: volume
+  frequency: daily
+  optional: true
+original_findings:
+  sample_market: Bitcoin, Ripple, Ethereum（摘要）
+  sample_period: 摘要未给起止年
+  stats: 与股票/外汇/贵金属多数常见因子无暴露；存在强时间序列动量，关注代理也能预测收益（摘要，无 t 值数字）。
+reproducible: 'yes'
+reproducible_reason: 动量腿只需日线 close 收益。QNT-28 Vision 归档有现货/USDT 永续 OHLCV 多周期，可在 BTC 等币上重放 TSMOM。关注代理（搜索量等）不在
+  Vision，本条只验收动量腿。
+markets:
+- crypto
+url: https://www.nber.org/papers/w24877

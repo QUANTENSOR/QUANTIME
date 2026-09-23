@@ -1,0 +1,35 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w20682
+nber_id: w20682
+doi: 10.3386/w20682
+title: Which Factors?
+authors:
+- Kewei Hou
+- Haitao Mo
+- Chen Xue
+- Lu Zhang
+year: 2014
+factor_name: q-factor vs FF5/6 spanning
+factor_definition: q 因子（市场、规模、投资、盈利）在 spanning 中大体吸收 FF5/6；Stambaugh-Yuan 因子对构造敏感，标准复制后接近
+  q 因子。
+family: quality
+frequency: monthly
+required_fields:
+- name: close
+  frequency: daily
+- name: market_cap
+  frequency: daily
+- name: investment
+  frequency: monthly
+- name: profitability
+  frequency: monthly
+original_findings:
+  sample_market: 美股因子模型比较
+  sample_period: 摘要未给
+  stats: q 大体 subsume FF5/6；复制后 SY 与 q 相关 0.8 / 0.84（摘要）。
+reproducible: 'no'
+reproducible_reason: 投资与盈利因子需要会计项，不是日线 OHLCV+市值能构造的。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w20682

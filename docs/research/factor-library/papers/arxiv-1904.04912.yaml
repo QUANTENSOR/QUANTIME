@@ -1,0 +1,32 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1904.04912
+arxiv_id: '1904.04912'
+categories:
+- q-fin.PM
+- q-fin.TR
+- cs.LG
+title: Enhancing Time Series Momentum Strategies Using Deep Neural Networks
+authors:
+- Bryan Lim
+- Stefan Zohren
+- Stephen Roberts
+year: 2019
+factor_name: Deep Momentum Networks (Sharpe-opt LSTM)
+factor_definition: 在波动缩放的 TSMOM 框架里用深度网络同时学趋势估计与仓位，直接优化夏普；回测 88 个连续期货。
+family: momentum
+frequency: daily
+required_fields:
+- name: futures_close
+  frequency: daily
+- name: realized_vol
+  frequency: daily
+original_findings:
+  sample_market: 88 continuous futures
+  sample_period: 摘要未给
+  stats: 夏普优化 LSTM 改进传统 TSMOM（摘要，具体夏普未写出）。
+reproducible: partial
+reproducible_reason: 日线期货连续合约不在 QNT-28 Vision（加密永续可作 rough analog 但不是 88 合约宇宙）；美股日线也不是期货连续合约。
+markets:
+- multi
+url: https://arxiv.org/abs/1904.04912

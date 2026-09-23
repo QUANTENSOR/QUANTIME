@@ -1,0 +1,34 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2310.11771
+arxiv_id: '2310.11771'
+categories:
+- q-fin.PR
+- q-fin.MF
+title: Perpetual Futures Pricing
+authors:
+- Damien Ackerer
+- Julien Hugonnier
+- Urban Jermann
+year: 2023
+factor_name: funding spec that pins perp to spot
+factor_definition: 线性/反向/quanto 永续的无套利价 = 现货在反映锚定强度的随机时刻抽样的风险中性期望；存在使期货价与现货重合的资金费设定，此时可用标的动态复制永续。
+family: funding
+frequency: daily
+required_fields:
+- name: funding_rate
+  frequency: daily
+- name: spot_close
+  frequency: daily
+- name: perp_close
+  frequency: daily
+original_findings:
+  sample_market: 理论（线性/反向/quanto）
+  sample_period: n/a
+  stats: 摘要为定价公式，无样本 t 值。
+reproducible: 'yes'
+reproducible_reason: 「资金费是否把永续钉在现货」可用 Vision funding + 现货/永续 OHLCV 做描述统计；完整无套利复制需利率/便利收益，标
+  partial 理论部分，实证钉住检验标 yes。
+markets:
+- crypto
+url: https://arxiv.org/abs/2310.11771
