@@ -2,7 +2,7 @@
 
 ## 1. 产品与权威
 
-quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究系统；**第一阶段只做 research / 回测，不交易**。**quantime 是产品；可重放的研究结论（数据快照 + 代码 commit + 报告）是它的产物。** 设计权威：`docs/adr/`（ADR，状态 PROPOSED 的条目是草案，不是许可）；调研事实：`docs/research/`；任务真相源是 Multica issue，代码真相源是 GitHub PR，聊天不算数。
+quantime 是美股 + 美股期权 + 加密（研究为主）+ A 股（数据与因子研究，不涉交易）、日线为主的量化研究系统；**第一阶段只做 research / 回测，不交易**。**quantime 是产品；可重放的研究结论（数据快照 + 代码 commit + 报告）是它的产物。** 设计权威：`docs/adr/`（ADR，状态 PROPOSED 的条目是草案，不是许可）；调研事实：`docs/research/`；任务真相源是 Multica issue，代码真相源是 GitHub PR，聊天不算数。
 
 ## 2. Map
 

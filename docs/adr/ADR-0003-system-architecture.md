@@ -11,7 +11,7 @@ research:
   - docs/research/other-markets-survey.md（QNT-26，PR #4，verify-b 审中）
 task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 ai_task_describe @ 9976805）
 revised: 2026-09-20（verify-a 第一轮：§5 基准协议、§4.1 单源不变量、§4.2 重放硬验收、allowlist 分层位置；第二轮：R1/R3/R4 校验边界、payload/content hash 分离、逐请求 fail-closed、§3.3 改为待批准提案）
-amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QNT-42 编者说明，承接 QNT-27/QNT-28 文档矛盾）；2026-09-23（QNT-49 编者说明，承接 owner 2026-09-23 框架裁决与模型升级裁决）
+amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QNT-42 编者说明，承接 QNT-27/QNT-28 文档矛盾）；2026-09-23（QNT-49 编者说明，承接 owner 2026-09-23 框架裁决与模型升级裁决）；2026-09-23（QNT-49 追加：AGENTS.md §1 市场范围）
 ---
 
 # ADR-0003 系统架构（PROPOSED）
@@ -21,6 +21,9 @@ amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QN
 ## 1. Context
 
 - 产品定义（AGENTS.md §1，owner 2B）：**美股 + 美股期权 + 加密（CEX 现货/USDT 永续）**、日线为主的量化研究系统；第一阶段 research / 回测，第二阶段 paper 交易。任务描述列出的 A股 / 国内期货 / 公募基金 / 港股只做接口预留（QNT-26 调研）不实现；DEX 不做（6A）。
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——AGENTS.md §1 市场范围改为「美股 + 美股期权 + 加密（研究为主）+ A 股（数据与因子研究，不涉交易）」。上条原文保留，不改 Decision。
+
 - 六个一级模块（任务描述）：行情看板、数据中心、研报资料、因子宫殿、策略工厂、~~实盘交易~~ → **paper 交易**（ADR-0001 D1.3）。
 - 硬约束：ADR-0001（agent 永不持有实盘凭据；实盘路径只到"订单意图 → 人工确认"）、ADR-0002（append-only、每行带 provenance、按 `ingestion_batch` 重放）、`.claude/rules/crypto-boundaries.md`（allowlist、下单类代码禁主网 host 字面量、perp 回测黄金用例）。
 - 运行环境：单机 LXC（owner 常驻检出 `/home/workspace/quantime` 只读）；数据是许可受限资产，`data/` 永不入库；仓库内 `fixtures/` **只放合成数据**（`synthetic: true` 头，AGENTS.md §2），公开数据即便许可允许也不入库，只经摄取进入 `data/`。
@@ -241,6 +244,9 @@ data/
 ## 9. 未决项与冲突（任务描述 vs ADR/AGENTS.md；只列不裁）
 
 1. **市场范围**：任务描述要求 A股/国内期货/公募基金/港股/美股/数字货币（CEX、DEX、现货、合约）全做；AGENTS.md §1 与 owner 2B 限定"美股 + 美股期权 + 加密"，其他只留接口，DEX 不做（6A）。→ 本 ADR 按 2B/6A 执行；范围扩展需修订 AGENTS.md §1 与本 ADR。
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——范围扩展已发生：AGENTS.md §1 改为「美股 + 美股期权 + 加密（研究为主）+ A 股（数据与因子研究，不涉交易）」；A 股仅数据与因子研究，不涉交易；国内期货 / 公募基金 / 港股 / DEX 口径不变。本条原文保留，不改 Decision。
+
 2. **"实盘交易"模块**：与 ADR-0001 D1.1/D1.3 冲突 → 降级为 paper 交易（§8，owner 1A）。
 3. **Python 3.14.5**：补丁号存在性未验证（矛盾 #21）→ 写 `>=3.14`。
 4. **ADR-0002 未决项第 2 条（batch 乱序提交）**：本 ADR §4.2 用"manifest 记录精确文件清单 + sha，重放强制校验（R1–R5）"代替 `batch_id ≤ N` 水位，属于对 D2.7 的**收紧实现**而非修改决策；是否将此写回 ADR-0002 修订（同时把 D2.4 的 `max(ingested_at)` 措辞改为 manifest 文件清单），待 owner 裁决。
