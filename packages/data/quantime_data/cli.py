@@ -334,6 +334,7 @@ def _add_disk_flag(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--min-free-gb",
         dest="min_free_bytes",
+        metavar="GB",
         type=_min_free_gb_arg,
         default=_MIN_FREE_UNSET,
         help=(
