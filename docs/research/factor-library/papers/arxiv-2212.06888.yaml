@@ -27,8 +27,8 @@ original_findings:
   sample_market: 加密永续 vs 传统外汇（摘要）
   sample_period: 摘要未给
   stats: 加密偏离大于传统外汇，跨币种共动、随时间缩小；隐含套利策略高夏普（摘要）。
-reproducible: 'yes'
-reproducible_reason: Vision 月度 fundingRate zip 与现货/永续 OHLCV 齐备，可算资金费 carry 与基差；无摩擦无套利闭式价格是理论项，实证腿可复现。
+reproducible: partial
+reproducible_reason: 原文用无摩擦无套利价格（及有交易成本时的区间）衡量永续偏离，并据此构造隐含套利；我们只有 Vision funding 与现货/永续 OHLCV，替换为资金费符号或原始基差，不是原文无套利价格。
 markets:
 - crypto
 url: https://arxiv.org/abs/2212.06888

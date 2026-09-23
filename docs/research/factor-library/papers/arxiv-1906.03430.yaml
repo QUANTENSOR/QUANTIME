@@ -1,0 +1,28 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1906.03430
+arxiv_id: '1906.03430'
+categories:
+- q-fin.TR
+title: The Effects of the Introduction of Bitcoin Futures on the Volatility of Bitcoin Returns
+authors:
+- Wonse Kim
+- Junseok Lee
+- Kyungwon Kang
+year: 2019
+factor_name: bitcoin realized volatility from minute prices
+factor_definition: 用分钟价格计算已实现波动，比较比特币期货上市前后的日内波动，并用离散傅里叶变换拆频率成分。
+family: volatility
+frequency: intraday
+required_fields:
+- name: close
+  frequency: intraday
+original_findings:
+  sample_market: 四家加密交易所的比特币
+  sample_period: 摘要以期货上市为事件，未给日历起止
+  stats: 上市后短期内更波动，随后比上市前更稳定（摘要，无具体 σ 数字）。
+reproducible: 'yes'
+reproducible_reason: 原文已实现波动由分钟价格直接计算。Vision OHLCV 多周期含分钟 K 线，可按该定义直接计算，不换变量。
+markets:
+- crypto
+url: https://arxiv.org/abs/1906.03430

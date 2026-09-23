@@ -23,7 +23,8 @@ original_findings:
   sample_period: 摘要未给
   stats: 计入市场微观结构约束后仍优于朴素买入持有（摘要，无具体夏普数字）。
 reproducible: 'yes'
-reproducible_reason: 只需多币日线 close。Vision 现货 OHLCV 可做协整配对；原文最优窗口校准可在日线上重做。
+reproducible_reason: 原文选对与价差都定义在价格序列上（Engle-Granger / KSS / Johansen + OU 半寿）。Vision 现货 OHLCV
+  的 close 可按该定义直接计算，不换变量。
 markets:
 - crypto
 url: https://arxiv.org/abs/2109.10662

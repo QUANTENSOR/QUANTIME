@@ -26,9 +26,9 @@ original_findings:
   sample_market: 理论（线性/反向/quanto）
   sample_period: n/a
   stats: 摘要为定价公式，无样本 t 值。
-reproducible: 'yes'
-reproducible_reason: 「资金费是否把永续钉在现货」可用 Vision funding + 现货/永续 OHLCV 做描述统计；完整无套利复制需利率/便利收益，标
-  partial 理论部分，实证钉住检验标 yes。
+reproducible: partial
+reproducible_reason: 原文用线性/反向/quanto 永续的无套利定价（现货在锚定强度对应的随机时刻上的风险中性期望）与复制组合；我们只有 Vision 的 funding
+  与现货/永续 OHLCV，替换为基差与资金费的描述统计，不是原文定价模型。
 markets:
 - crypto
 url: https://arxiv.org/abs/2310.11771

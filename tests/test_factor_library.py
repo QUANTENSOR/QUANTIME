@@ -37,7 +37,7 @@ def test_library_meets_batch_counts(records):
     assert len(crypto) >= 12
     assert len(us) >= 12
     crypto_yes = [r for r in crypto if r["reproducible"] == "yes"]
-    assert len(crypto_yes) >= 6
+    assert len(crypto_yes) >= 7
     us_yes = [r for r in us if r["reproducible"] == "yes"]
     assert us_yes, "美股线至少应有若干 yes（日线 OHLCV+市值，待付费源）"
     for r in us_yes:
@@ -50,6 +50,30 @@ def test_every_yaml_validates_and_id_matches_filename(records):
     stems = {p.stem for p in paths}
     ids = {r["id"] for r in records}
     assert stems == ids
+
+
+def test_reject_downgrades_are_partial_with_substitution_formula(records):
+    """verify-b REJECT 点名的 5 条必须降为 partial，且写出原文用/我们只有/替换为。"""
+    by_id = {r["id"]: r for r in records}
+    named = (
+        "arxiv-2310.11771",
+        "arxiv-2506.08573",
+        "arxiv-2108.11921",
+        "arxiv-2409.00416",
+        "arxiv-2607.01377",
+    )
+    for rid in named:
+        rec = by_id[rid]
+        assert rec["reproducible"] == "partial", rid
+        for needle in ("原文用", "我们只有", "替换为"):
+            assert needle in rec["reproducible_reason"], rid
+
+
+def test_yes_reasons_do_not_describe_a_proxy(records):
+    for r in records:
+        if r["reproducible"] != "yes":
+            continue
+        assert "替换为" not in r["reproducible_reason"], r["id"]
 
 
 def test_filter_by_market_family_reproducible(records):

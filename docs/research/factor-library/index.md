@@ -5,24 +5,30 @@
 一条 YAML 一篇，只存元数据 + 摘要页链接，不存 PDF / 全文。
 筛选：`uv run python scripts/factor_library.py filter` （--market / --family / --reproducible）。
 
-共 36 篇。
+共 42 篇。
 
 | id | 年 | 市场 | 族 | 可复现 | 标题 | 来源 |
 |---|---|---|---|---|---|---|
 | `arxiv-1706.10059` | 2017 | crypto | other | partial | A Deep Reinforcement Learning Framework for the Financial Portfolio Management Problem | [link](https://arxiv.org/abs/1706.10059) |
 | `nber-w24877` | 2018 | crypto | momentum | yes | Risks and Returns of Cryptocurrency | [link](https://www.nber.org/papers/w24877) |
-| `arxiv-1904.00890` | 2019 | crypto | momentum | yes | Momentum and liquidity in cryptocurrencies | [link](https://arxiv.org/abs/1904.00890) |
+| `arxiv-1903.06033` | 2019 | crypto | reversal | yes | Altcoin-Bitcoin Arbitrage | [link](https://arxiv.org/abs/1903.06033) |
+| `arxiv-1904.00890` | 2019 | crypto | momentum | partial | Momentum and liquidity in cryptocurrencies | [link](https://arxiv.org/abs/1904.00890) |
+| `arxiv-1904.09403` | 2019 | crypto | momentum | yes | On the Evolution of Cryptocurrency Market Efficiency | [link](https://arxiv.org/abs/1904.09403) |
+| `arxiv-1906.03430` | 2019 | crypto | volatility | yes | The Effects of the Introduction of Bitcoin Futures on the Volatility of Bitcoin Returns | [link](https://arxiv.org/abs/1906.03430) |
+| `arxiv-1912.03270` | 2019 | crypto | funding | yes | BitMEX Funding Correlation with Bitcoin Exchange Rate | [link](https://arxiv.org/abs/1912.03270) |
 | `nber-w25882` | 2019 | crypto | size | partial | Common Risk Factors in Cryptocurrency | [link](https://www.nber.org/papers/w25882) |
 | `arxiv-2004.07290` | 2020 | crypto | network | no | From code to market: Network of developers and correlated returns of cryptocurrencies | [link](https://arxiv.org/abs/2004.07290) |
-| `arxiv-2108.11921` | 2021 | crypto | momentum | yes | A Time-Varying Network for Cryptocurrencies | [link](https://arxiv.org/abs/2108.11921) |
+| `arxiv-2103.00395` | 2021 | crypto | volatility | yes | Scale matters: The daily, weekly and monthly volatility and predictability of Bitcoin, Gold, and the S&P 500 | [link](https://arxiv.org/abs/2103.00395) |
+| `arxiv-2108.11921` | 2021 | crypto | momentum | partial | A Time-Varying Network for Cryptocurrencies | [link](https://arxiv.org/abs/2108.11921) |
 | `arxiv-2109.10662` | 2021 | crypto | pairs | yes | Evaluation of Dynamic Cointegration-Based Pairs Trading Strategy in the Cryptocurrency Market | [link](https://arxiv.org/abs/2109.10662) |
 | `arxiv-2202.08967` | 2022 | crypto | sentiment | no | Beyond Trading Data: The Hidden Influence of Public Awareness and Interest on Cryptocurrency Volatility | [link](https://arxiv.org/abs/2202.08967) |
+| `arxiv-2202.09845` | 2022 | crypto | oi | yes | On the Dynamics of Solid, Liquid and Digital Gold Futures | [link](https://arxiv.org/abs/2202.09845) |
 | `arxiv-2206.03386` | 2022 | crypto | network | partial | Dependency structures in cryptocurrency market from high to low frequency | [link](https://arxiv.org/abs/2206.03386) |
 | `arxiv-2211.13274` | 2022 | crypto | volatility | no | Investor base and idiosyncratic volatility of cryptocurrencies | [link](https://arxiv.org/abs/2211.13274) |
-| `arxiv-2212.06888` | 2022 | crypto | carry | yes | Fundamentals of Perpetual Futures | [link](https://arxiv.org/abs/2212.06888) |
-| `arxiv-2310.11771` | 2023 | crypto | funding | yes | Perpetual Futures Pricing | [link](https://arxiv.org/abs/2310.11771) |
-| `arxiv-2310.14973` | 2023 | crypto | oi | yes | Reconciling Open Interest with Traded Volume in Perpetual Swaps | [link](https://arxiv.org/abs/2310.14973) |
-| `arxiv-2506.08573` | 2025 | crypto | funding | yes | Designing funding rates for perpetual futures in cryptocurrency markets | [link](https://arxiv.org/abs/2506.08573) |
+| `arxiv-2212.06888` | 2022 | crypto | carry | partial | Fundamentals of Perpetual Futures | [link](https://arxiv.org/abs/2212.06888) |
+| `arxiv-2310.11771` | 2023 | crypto | funding | partial | Perpetual Futures Pricing | [link](https://arxiv.org/abs/2310.11771) |
+| `arxiv-2310.14973` | 2023 | crypto | oi | partial | Reconciling Open Interest with Traded Volume in Perpetual Swaps | [link](https://arxiv.org/abs/2310.14973) |
+| `arxiv-2506.08573` | 2025 | crypto | funding | partial | Designing funding rates for perpetual futures in cryptocurrency markets | [link](https://arxiv.org/abs/2506.08573) |
 | `arxiv-2506.21100` | 2025 | crypto | volatility | partial | Heterogeneous Exposures to Systematic and Idiosyncratic Risk across Crypto Assets: A Divide-and-Conquer Approach | [link](https://arxiv.org/abs/2506.21100) |
 | `arxiv-2601.07664` | 2026 | crypto | multi | partial | Crypto Pricing with Hidden Factors | [link](https://arxiv.org/abs/2601.07664) |
 | `arxiv-2603.09164` | 2026 | crypto | liquidity | no | Slippage-at-Risk (SaR): A Forward-Looking Liquidity Risk Framework for Perpetual Futures Exchanges | [link](https://arxiv.org/abs/2603.09164) |
@@ -43,5 +49,5 @@
 | `arxiv-1603.00751` | 2016 | us_equity | other | no | Equity forecast: Predicting long term stock price movement using machine learning | [link](https://arxiv.org/abs/1603.00751) |
 | `nber-w28800` | 2021 | us_equity | other | no | From Man vs. Machine to Man + Machine: The Art and AI of Stock Analyses | [link](https://www.nber.org/papers/w28800) |
 | `arxiv-2403.12180` | 2024 | us_equity | pairs | yes | Advanced Statistical Arbitrage with Reinforcement Learning | [link](https://arxiv.org/abs/2403.12180) |
-| `arxiv-2409.00416` | 2024 | us_equity | beta | yes | Betting Against (Bad) Beta | [link](https://arxiv.org/abs/2409.00416) |
-| `arxiv-2607.01377` | 2026 | us_equity | liquidity | yes | Liquidity Premium and Investment Horizons | [link](https://arxiv.org/abs/2607.01377) |
+| `arxiv-2409.00416` | 2024 | us_equity | beta | partial | Betting Against (Bad) Beta | [link](https://arxiv.org/abs/2409.00416) |
+| `arxiv-2607.01377` | 2026 | us_equity | liquidity | partial | Liquidity Premium and Investment Horizons | [link](https://arxiv.org/abs/2607.01377) |

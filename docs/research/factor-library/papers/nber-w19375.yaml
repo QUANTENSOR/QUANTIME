@@ -9,7 +9,7 @@ authors:
 - Hao Jiang
 year: 2013
 factor_name: cross-sectional tail-risk loading
-factor_definition: 每月用个股崩盘识别共同尾部风险；股票对滞后尾部风险的载荷高则后续收益高。
+factor_definition: 每月用个股价格崩盘识别共同尾部风险；股票对滞后尾部风险的载荷高则后续收益高。摘要写明该度量由权益数据直接估计。
 family: volatility
 frequency: daily
 required_fields:
@@ -22,7 +22,7 @@ original_findings:
   sample_period: 摘要称长于期权样本
   stats: 尾部风险 1σ 预测未来一年市场超额约 +4.5%；高载荷相对低载荷年化三因子 alpha +5.4%（摘要）。
 reproducible: 'yes'
-reproducible_reason: 共同尾部可由截面日收益崩盘构造，只需日线 OHLCV + 市值加权。待付费源。与指数期权对照部分标不做。
+reproducible_reason: 摘要写明尾部风险由截面收益中的个股崩盘直接估计，期权尾部只是对照、不是输入。日线 OHLCV 与市值可按该定义直接计算。待付费源。
 markets:
 - us_equity
 url: https://www.nber.org/papers/w19375

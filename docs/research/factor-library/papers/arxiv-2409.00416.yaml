@@ -25,8 +25,9 @@ original_findings:
   sample_market: 摘要未写市场，按 BAB 文献默认股票
   sample_period: 摘要未给
   stats: 改善 BAB 整体表现，成败取决于交易成本控制（摘要）。
-reproducible: 'yes'
-reproducible_reason: 若用市场超额收益近似贴现率新闻，双排序只需日线收益与市值。待付费源。完整 CF/DR 新闻分解需要更多宏观/债券数据，本条用近似。
+reproducible: partial
+reproducible_reason: 原文用 Campbell-Vuolteenaho 的现金流新闻分解得到 bad-beta，再与 beta 双排序；我们只有日线 OHLCV
+  与市值，没有新闻分解，替换为市场超额收益近似贴现率新闻。待付费源也不能补上该分解。
 markets:
 - us_equity
 url: https://arxiv.org/abs/2409.00416

@@ -24,7 +24,7 @@ original_findings:
   sample_period: 摘要写 34-year period，未给起止年
   stats: 高流动性敏感相对低敏感，年化多空约 7.5%（已调市场/规模/价值/动量，摘要）。
 reproducible: 'yes'
-reproducible_reason: 日线收益、成交量与市值即可构造 PS 流动性状态与 beta（成交量视为 OHLCV 的 V）。待付费源。
+reproducible_reason: 原文月度流动性就是日收益对带符号成交额回归的截面平均，订单流按该文日度构造，不是另造的 tick 代理。日线 OHLCV（含 volume）与市值可按该定义直接计算。待付费源。
 markets:
 - us_equity
 url: https://www.nber.org/papers/w8462

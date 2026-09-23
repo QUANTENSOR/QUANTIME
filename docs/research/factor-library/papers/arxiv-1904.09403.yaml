@@ -1,0 +1,28 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1904.09403
+arxiv_id: '1904.09403'
+doi: 10.1080/13504851.2020.1758617
+categories:
+- q-fin.ST
+- q-fin.GN
+title: On the Evolution of Cryptocurrency Market Efficiency
+authors:
+- Akihiko Noda
+year: 2019
+factor_name: time-varying return efficiency (GLS AMH)
+factor_definition: 用不依赖样本量的广义最小二乘时变模型，在比特币与以太坊收益上度量市场有效性程度（Lo 的自适应市场假说）。
+family: momentum
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: Bitcoin 与 Ethereum
+  sample_period: 摘要未给起止
+  stats: 有效性随时间变化；比特币多数时期高于以太坊；高流动性市场在演化（摘要）。
+reproducible: 'yes'
+reproducible_reason: 原文有效性度量定义在收益的时变 GLS 模型上，不另需链上或情绪字段。Vision OHLCV 的 close 可按该定义直接计算，不换变量。
+markets:
+- crypto
+url: https://arxiv.org/abs/1904.09403

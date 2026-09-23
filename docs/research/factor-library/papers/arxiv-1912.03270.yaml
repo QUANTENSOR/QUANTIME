@@ -1,0 +1,29 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1912.03270
+arxiv_id: '1912.03270'
+categories:
+- q-fin.ST
+title: BitMEX Funding Correlation with Bitcoin Exchange Rate
+authors:
+- Sai Srikar Nimmagadda
+- Pawan Sasanka Ammanamanchi
+year: 2019
+factor_name: funding-rate Granger predictor of inverse perp
+factor_definition: 资金费对比特币反向永续价格做 Granger 因果检验，并用拟合的 GARCH 预测资金费本身；摘要把资金费当作市场趋势的预测工具。
+family: funding
+frequency: daily
+required_fields:
+- name: funding_rate
+  frequency: daily
+- name: perp_close
+  frequency: daily
+original_findings:
+  sample_market: BitMEX 比特币反向永续与其资金费
+  sample_period: 摘要未给
+  stats: 资金费异方差；资金费与反向永续价格存在 Granger 因果（摘要，无系数表）。
+reproducible: 'yes'
+reproducible_reason: 原文检验对象就是资金费序列与永续价格。Vision 归档的 funding 与永续 OHLCV 可按该定义直接计算，不换变量。
+markets:
+- crypto
+url: https://arxiv.org/abs/1912.03270

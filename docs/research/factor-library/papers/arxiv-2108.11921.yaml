@@ -19,14 +19,12 @@ required_fields:
   frequency: daily
 - name: tech_similarity
   frequency: daily
-  optional: true
 original_findings:
   sample_market: 加密截面（摘要）
   sample_period: 摘要未给
   stats: 跨币动量组合日收益 1.08%；作者称非行为因子驱动（摘要）。
-reproducible: 'yes'
-reproducible_reason: 交叉可预测性动量只需日线 close。Vision OHLCV 可做收益网络与动量腿；技术相似度（代码/链上）不在 Vision，聚类完整版为
-  partial，本条验收收益动量腿。
+reproducible: partial
+reproducible_reason: 原文用收益交叉可预测性与技术相似度共同做谱聚类，再在社区上做跨币动量；我们只有 Vision OHLCV，没有技术相似度，替换为仅收益网络上的动量，不是原文因子。
 markets:
 - crypto
 url: https://arxiv.org/abs/2108.11921

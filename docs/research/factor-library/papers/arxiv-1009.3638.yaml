@@ -26,7 +26,7 @@ original_findings:
   sample_period: 摘要未给
   stats: 摘要为方法纠正，无定价 t 值。
 reproducible: 'yes'
-reproducible_reason: 日线收盘即可估计序列互相关并修正 √T。待付费源（美股日线）。
+reproducible_reason: 原文持有期波动与风险贡献定义在收盘收益的序列互相关上。日线 OHLCV 的 close 可按该定义直接计算。待付费源。
 markets:
 - us_equity
 url: https://arxiv.org/abs/1009.3638

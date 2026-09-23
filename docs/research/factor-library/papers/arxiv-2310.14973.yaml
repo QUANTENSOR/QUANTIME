@@ -24,8 +24,9 @@ original_findings:
   sample_market: 加密永续（摘要）
   sample_period: 摘要未给
   stats: 摘要强调口径与抵押下界，未给 IC/分层收益数字。
-reproducible: 'yes'
-reproducible_reason: QNT-28 Vision metrics/OI 与成交量 K 线可对照「OI ≠ volume」；储备证明不在归档，本条只验收 OI/成交量口径。
+reproducible: partial
+reproducible_reason: 原文用未平仓合约 OI 估计抵押下界，并与储备证明对照；我们只有 Vision 的 OI 与成交量，没有储备证明，替换为 OI 对 volume
+  的口径比较，不是原文对照。
 markets:
 - crypto
 url: https://arxiv.org/abs/2310.14973

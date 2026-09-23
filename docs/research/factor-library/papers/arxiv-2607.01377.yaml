@@ -27,9 +27,9 @@ original_findings:
   sample_market: CRSP 美股 2020–2025
   sample_period: 2020–2025
   stats: 带符号订单流强预测当月与次月收益；成交量波动预测后续收益更低；Fama-MacBeth 确认订单流信号（摘要）。
-reproducible: 'yes'
-reproducible_reason: Amihud 风格 λ 可用日线 close/volume；带符号订单流若用日收益符号×成交量近似，则仍落在 OHLCV+市值。待付费源。真
-  tick 订单流不做。
+reproducible: partial
+reproducible_reason: 原文用日度真实订单流回归估 Kyle λ，并另给 Amihud 风格比率；我们只有日线 OHLCV 与市值，没有订单流，替换为收益符号×成交量。待付费源若只有
+  OHLCV+市值，仍不是原文订单流。
 markets:
 - us_equity
 url: https://arxiv.org/abs/2607.01377

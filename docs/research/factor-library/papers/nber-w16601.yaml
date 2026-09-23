@@ -26,7 +26,7 @@ original_findings:
   sample_period: 摘要未给起止
   stats: 各资产类 BAB 风险调整收益显著；资金约束收紧时 BAB 收益低（摘要）。
 reproducible: 'yes'
-reproducible_reason: 美股腿只需日线收益估 beta + 市值加权。待付费源：日线 OHLCV 与市值不在 Vision，等美股付费源后可直接构造。
+reproducible_reason: 原文 BAB 由收益估 beta、按市值加权后杠杆化低 beta、做空高 beta。日线 OHLCV 与市值可按该定义直接计算。待付费源。
 markets:
 - us_equity
 url: https://www.nber.org/papers/w16601

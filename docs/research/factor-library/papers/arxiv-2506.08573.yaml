@@ -25,8 +25,8 @@ original_findings:
   sample_market: 加密永续（理论+设计）
   sample_period: n/a
   stats: 摘要为存在唯一性结果，无样本统计。
-reproducible: 'yes'
-reproducible_reason: 「现行 Binance 资金费是否把标记价拉向现货」可用 Vision funding + OHLCV 检验；BSDE 最优设计本身不复现。
+reproducible: partial
+reproducible_reason: 原文用路径依赖无穷期限 BSDE 设计资金费并构造复制组合；我们只有 Vision 的 funding 与 OHLCV，替换为「现行资金费是否拉近标记价与现货」的描述统计，不是原文设计。
 markets:
 - crypto
 url: https://arxiv.org/abs/2506.08573

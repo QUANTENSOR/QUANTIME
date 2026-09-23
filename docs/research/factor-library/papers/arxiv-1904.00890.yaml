@@ -22,8 +22,8 @@ original_findings:
   sample_market: 加密现货截面，币种集合随时间变化（摘要）
   sample_period: 摘要未给
   stats: 最流动组动量强；两只只做多策略风险调整后优于市值加权（摘要，无 t 值）。
-reproducible: 'yes'
-reproducible_reason: 二维排序只需日线 close 与 volume（流动性代理）。Vision 现货 OHLCV 覆盖主流币，可在可得宇宙上复现；摘要未写形成期长度，需自选窗口并标注。
+reproducible: partial
+reproducible_reason: 原文用动量–流动性二维排序（摘要未给出流动性公式）；我们只有 Vision OHLCV 的 close 与 volume，替换为成交量排序充当流动性，不是原文流动性定义。
 markets:
 - crypto
 url: https://arxiv.org/abs/1904.00890

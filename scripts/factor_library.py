@@ -222,6 +222,9 @@ def validate_record(record: dict[str, Any], *, filename: str = "") -> None:
     if bad:
         raise RecordError(f"{path}: markets 非法: {bad}")
 
+    # 「近似熵」是统计量名称，不能把「近似」一律当代理替换。只禁「替换为」。
+    if repro == "yes" and "替换为" in reason:
+        raise RecordError(f"{path}: yes 不得写「替换为」（应降为 partial）")
     if "crypto" in markets and repro == "yes":
         vision_ok = any(
             token in reason.lower()
@@ -231,6 +234,10 @@ def validate_record(record: dict[str, Any], *, filename: str = "") -> None:
             raise RecordError(f"{path}: 加密线 reproducible=yes 须对照 Vision 字段写理由")
     if "us_equity" in markets and repro == "yes" and "待付费源" not in reason:
         raise RecordError(f"{path}: 美股线 reproducible=yes 须标注「待付费源」")
+    if repro == "partial" and "替换为" in reason:
+        for needle in ("原文用", "我们只有", "替换为"):
+            if needle not in reason:
+                raise RecordError(f"{path}: partial 替换理由须含「{needle}」")
 
 
 def load_all(directory: Path | None = None) -> list[dict[str, Any]]:
