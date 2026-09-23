@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import collections
 import datetime as dt
 
 import pyarrow as pa
 import pytest
 from quantime_core.ids import new_batch_id, new_run_id
-from quantime_data import batches
+from quantime_data import batches, diskguard
+
+shutil_usage = collections.namedtuple("shutil_usage", "total used free")
 
 KLINE_SCHEMA = pa.schema(
     [
@@ -75,6 +78,19 @@ def make_table():
 @pytest.fixture
 def root(tmp_path):
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _plenty_of_disk(monkeypatch):
+    """磁盘守卫默认开（5 GB）：测试不依赖 CI 主机的真实剩余空间。
+
+    需要「磁盘不足」的测试用 `test_run_guards.disk` 覆盖这一桩。
+    """
+    monkeypatch.setattr(
+        diskguard.shutil,
+        "disk_usage",
+        lambda path: shutil_usage(total=1 << 50, used=0, free=1 << 50),
+    )
 
 
 @pytest.fixture

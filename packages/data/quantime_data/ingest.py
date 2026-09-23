@@ -32,6 +32,7 @@ from quantime_core.paths import AssetClass, DataType, Freq, Market, raw_batch_di
 
 from . import audit, batches
 from .adapter import Archive, SourceAdapter, get_adapter
+from .diskguard import DEFAULT_MIN_FREE_BYTES, check_disk
 from .spec import (
     FetchedFile,
     Fetcher,
@@ -190,14 +191,20 @@ def ingest_one(
     adapter: SourceAdapter | None = None,
     retry: object | None = None,
     from_report: str | None = None,
+    min_free_bytes: int | None = DEFAULT_MIN_FREE_BYTES,
 ) -> IngestResult:
     """完整摄取一个 spec 并提交为**一个新 batch**。
 
     同参数重跑请传 `kind='rerun'` + `rerun_of=<原 batch_id>`：产出的是新 `batch_id`
     的新目录，原 batch 的每个字节保持不变（ADR-0002）。补采（QNT-45 第 3 项）走的正是
     这条路径——它写的是新 batch，绝不动被补的那一个。
+
+    开头先过磁盘守卫（R9）：这里是全部写入口共用的「开 batch」边界，守卫只此一处。
+    剩余 < `min_free_bytes`（默认 5 GB，`None` 关闭）→ `DiskLowError`，一个请求都不发、
+    不登记 batch_id。
     """
     root = Path(root)
+    check_disk(root, min_free_bytes)
     adapter = adapter if adapter is not None else get_adapter()
     fetched, missing = fetch_files(
         spec, fetch, verify_checksum=verify_checksum, adapter=adapter, retry=retry

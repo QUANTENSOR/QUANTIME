@@ -47,12 +47,13 @@ from . import audit as audit_mod
 from . import daily as daily_mod
 from . import ingest as ingest_mod
 from .adapter import DEFAULT_SOURCE, adapter_names, get_adapter
+from .diskguard import DEFAULT_MIN_FREE_BYTES, DiskLowError
 from .retry import (
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_TOTAL_SECONDS,
     RetryPolicy,
 )
-from .runlog import ABORT_REASONS
+from .runlog import ABORT_DISK_LOW, ABORT_REASONS
 from .transport import PublicTransport, Response, TransportIOError, assert_public_readonly_url
 from .universe import load_universe
 
@@ -245,6 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
                 action="store_true",
                 help="摄取后做缺口/重复核查并把报告也提交为一个 batch",
             )
+            _add_disk_flag(p)
         if name == "daily":
             p.add_argument(
                 "--since-last",
@@ -308,13 +310,26 @@ def _add_retry_flags(p: argparse.ArgumentParser) -> None:
     )
 
 
+#: 磁盘守卫阈值的环境变量（GB）：给 `--min-free-gb` 当缺省值；unit 里仍显式写 `--min-free-gb`。
+MIN_FREE_GB_ENV = "QUANTIME_MIN_FREE_GB"
+
+
+def _default_min_free_gb() -> float:
+    value = (os.environ.get(MIN_FREE_GB_ENV) or "").strip()
+    return float(value) if value else DEFAULT_MIN_FREE_BYTES / 1024**3
+
+
 def _add_disk_flag(p: argparse.ArgumentParser) -> None:
-    """磁盘守卫阈值（R8）：数据根所在文件系统剩余低于它就不开新 batch。0 = 关闭。"""
+    """磁盘守卫阈值（R8/R9）：`ingest` / `daily` / `backfill` 三个写子命令同一个参数、同一语义。
+
+    守卫本身只在 `ingest.ingest_one` 开头一处（`diskguard.check_disk`），这里只传阈值。
+    缺省 5 GB（或 `$QUANTIME_MIN_FREE_GB`）；只有显式 `0` 关闭。
+    """
     p.add_argument(
         "--min-free-gb",
         type=float,
-        default=daily_mod.DEFAULT_MIN_FREE_BYTES / 1024**3,
-        help="数据根所在文件系统的最低剩余空间（GB，默认 5；0 关闭守卫）",
+        default=_default_min_free_gb(),
+        help=f"数据根所在文件系统的最低剩余空间（GB，默认 5 或 ${MIN_FREE_GB_ENV}；0 关闭守卫）",
     )
 
 
@@ -377,7 +392,20 @@ def _run_ingest(args) -> int:
                 rerun_of=args.rerun_of,
                 verify_checksum=not args.no_verify_checksum,
                 adapter=adapter,
+                min_free_bytes=_min_free_bytes(args),
             )
+        except DiskLowError as exc:
+            # `ingest` 平时不写运行记录；被守卫拦下时留一笔（run_log + coverage=failed 的
+            # 报告），与 `record-abort --reason disk_low` 同一形状。之后的序列不再尝试。
+            out = daily_mod.record_abort(
+                args.root,
+                ABORT_DISK_LOW,
+                run_id=run_id,
+                source=adapter.name,
+                detail=f"{exc.detail}（ingest 停在 {spec.describe()}，已提交 {len(results)} 个）",
+            )
+            _print_run(args.root, out)
+            return 1
         except ingest_mod.IngestError as exc:
             failures.append(f"{spec.describe()}: {exc}")
             continue

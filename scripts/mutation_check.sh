@@ -398,9 +398,9 @@ mutate "Q45-R7d 未消化 pending → coverage=pending" "$DATA/report.py" \
 
 # ---- R8：部署 ----
 
-# R8a：磁盘守卫失效——剩 4 GB 照样开 batch。
-mutate "Q45-R8a 磁盘不足拒开 batch（删掉守卫）" "$DATA/daily.py" \
-  'if free >= min_free_bytes:=>>if True:' \
+# R8a：磁盘守卫的比较失效——剩 4 GB 照样开 batch。
+mutate "Q45-R8a 磁盘不足拒开 batch（阈值比较失效）" "$DATA/diskguard.py" \
+  'if free < min_free_bytes:=>>if False:' \
   packages/data/tests/test_run_guards.py::test_low_disk_refuses_to_start_a_batch_and_reports_failed_with_the_reason
 
 # R8b：被拦下的运行（pull_failed / disk_low）coverage 不再强制 failed。
@@ -427,6 +427,31 @@ mutate "Q45-R8e pull_failed 只在主进程没跑时记" "systemd/user/quantime-
 mutate "Q45-R8f ReadWritePaths 只含数据根" "systemd/user/quantime-ingest@.service" \
   'ReadWritePaths=/home/workspace/quantime/data=>>ReadWritePaths=/home/workspace/quantime' \
   tests/test_systemd_units.py::test_the_resident_checkout_is_read_only_and_only_the_data_root_is_writable
+
+# ---- R9：守卫只在共用的「开 batch」边界一处 ----
+
+# R8g：删掉 `ingest_one` 开头那一处守卫调用。ingest / ingest --rerun-of / daily / backfill
+# 逐条分别跑、每一条都必须变红——还绿的那条入口另有一份守卫兜底（或根本没经过这里）。
+R8G_TARGETS=(
+  packages/data/tests/test_run_guards.py::test_ingest_cli_refuses_to_open_a_batch_when_the_disk_is_low
+  packages/data/tests/test_run_guards.py::test_ingest_rerun_of_refuses_to_open_a_batch_when_the_disk_is_low
+  packages/data/tests/test_run_guards.py::test_low_disk_refuses_to_start_a_batch_and_reports_failed_with_the_reason
+  packages/data/tests/test_run_guards.py::test_backfill_goes_through_the_same_guard
+)
+for t in "${R8G_TARGETS[@]}"; do
+  mutate "Q45-R8g 删掉共用边界的守卫 → ${t##*::}" "$DATA/ingest.py" \
+    '    check_disk(root, min_free_bytes)
+=>>' \
+    "$t"
+done
+
+# R8h：`ingest` 不再注册 `--min-free-gb`——参数不再是三个写子命令共用的。
+mutate "Q45-R8h ingest 也接受 --min-free-gb" "$DATA/cli.py" \
+  '            )
+            _add_disk_flag(p)
+=>>            )
+' \
+  packages/data/tests/test_run_guards.py::test_ingest_with_min_free_gb_zero_commits_even_when_the_disk_is_low
 
 mutate "Q45-d unit 文件注入主网 host 字面量" "systemd/user/quantime-ingest@.service" \
   '[Service]=>>[Service]

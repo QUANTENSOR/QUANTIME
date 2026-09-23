@@ -11,8 +11,8 @@
       推算增量区间（`--since-last`：起点 = min(水位线次日, 未消化的 pending 起点)）
         —— 空增量则记一笔 skip
       → 整段都还没发布 → 记 `pending_upstream`，不取、不算失败
-      → 磁盘守卫：数据根所在文件系统剩余 < 阈值 → 不开新 batch，记 `disk_low`（R8）
-      → 带退避重试地摄取（`retry.RetryContext`）
+      → 带退避重试地摄取（`retry.RetryContext`）；摄取开头先过磁盘守卫（`diskguard`，只在
+        `ingest_one` 一处，R9）：剩余 < 阈值 → 不开新 batch，这里记 `disk_low`
       → 核查刚提交的 batch（缺口 / 重复 / 覆盖）
       → 记进运行记录与报告（**失败的序列同样进报告**，带结构化缺档清单，补采据此重建）
       → `--since-last` 下本次什么都没提交的序列：请求起点记进运行记录 `pending_since`，
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import datetime as dt
 import os
-import shutil
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -35,6 +34,7 @@ from pathlib import Path
 from . import backfill as backfill_mod
 from . import ingest as ingest_mod
 from .adapter import Archive, SourceAdapter, get_adapter
+from .diskguard import DEFAULT_MIN_FREE_BYTES, DiskLowError
 from .incremental import describe_increment, plan_incremental, start_ignored_note
 from .report import (
     DailyReport,
@@ -60,9 +60,6 @@ MODE_FULL = "full"
 MODE_INCREMENTAL = "incremental"
 MODE_BACKFILL = "backfill"
 MODE_ABORTED = "aborted"
-
-#: 磁盘守卫默认阈值：数据根所在文件系统剩余不足 5 GB 就不开新 batch（owner 裁决 2026-09-23）。
-DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
 
 
 @dataclass(slots=True)
@@ -94,25 +91,6 @@ def error_class(exc: BaseException) -> str:
     return f"{name}({type(cause).__name__})" if cause is not None else name
 
 
-def free_bytes(root: Path) -> int:
-    """数据根所在文件系统的剩余字节。`data/` 可能是指向别的盘的软链接，所以量它而不是量 root。"""
-    target = root / "data"
-    return shutil.disk_usage(target if target.exists() else root).free
-
-
-def disk_low_reason(root: Path, min_free_bytes: int | None) -> str | None:
-    """磁盘守卫（R8）：剩余不足阈值 → 回传写进报告的原因；够用或守卫关闭 → `None`。"""
-    if min_free_bytes is None:
-        return None
-    free = free_bytes(root)
-    if free >= min_free_bytes:
-        return None
-    return (
-        f"{ABORT_DISK_LOW}: 数据根所在文件系统剩余 {free / 1024**3:.2f} GB"
-        f" < 阈值 {min_free_bytes / 1024**3:.2f} GB，拒绝开始新 batch"
-    )
-
-
 def pending_windows(adapter: SourceAdapter, spec: IngestSpec) -> tuple[PendingWindow, ...]:
     """adapter 声明的「按发布节奏尚未发布」日期段；没实现这个可选方法的源 = 无。"""
     fn = getattr(adapter, "pending_windows", None)
@@ -140,8 +118,12 @@ def _ingest_series(
     verify_checksum: bool,
     monotonic,
     from_report: str | None = None,
+    min_free_bytes: int | None = DEFAULT_MIN_FREE_BYTES,
 ) -> tuple[ingest_mod.IngestResult | None, SeriesOutcome, str | None]:
-    """摄取一条序列并记账。回传 `(结果, 运行记录条目, 失败说明)`。"""
+    """摄取一条序列并记账。回传 `(结果, 运行记录条目, 失败说明)`。
+
+    `DiskLowError`（共用守卫，在 `ingest_one` 开头）不在这里吞：由 `_process_series` 记账。
+    """
     before = retry.retries
     attempts_before = retry.recorder.attempts
     started = monotonic()
@@ -158,6 +140,7 @@ def _ingest_series(
             adapter=adapter,
             retry=retry,
             from_report=from_report,
+            min_free_bytes=min_free_bytes,
         )
     except (IngestError, RetryExhaustedError) as exc:
         elapsed = monotonic() - started
@@ -228,8 +211,24 @@ def _process_series(
         )
         out.report.add(series_pending(target, source=adapter.name, pending_upstream=pending))
         return False
-    low = disk_low_reason(root, min_free_bytes)
-    if low is not None:
+    try:
+        result, outcome, failure = _ingest_series(
+            root,
+            target,
+            fetch,
+            run_id=run_id,
+            adapter=adapter,
+            retry=retry,
+            now=now,
+            kind=kind,
+            rerun_of=rerun_of,
+            verify_checksum=verify_checksum,
+            monotonic=monotonic,
+            from_report=from_report,
+            min_free_bytes=min_free_bytes,
+        )
+    except DiskLowError as exc:
+        low = str(exc)
         # 不开新 batch：一个字节都不取、不写。缺档照样进报告，磁盘腾出来后可按报告补采，
         # `--since-last` 也会从本次的起点续取（`pending_since`）。
         out.log.abort_reason = ABORT_DISK_LOW
@@ -260,20 +259,6 @@ def _process_series(
             )
         )
         return False
-    result, outcome, failure = _ingest_series(
-        root,
-        target,
-        fetch,
-        run_id=run_id,
-        adapter=adapter,
-        retry=retry,
-        now=now,
-        kind=kind,
-        rerun_of=rerun_of,
-        verify_checksum=verify_checksum,
-        monotonic=monotonic,
-        from_report=from_report,
-    )
     if pending_days:
         outcome = replace(outcome, pending_upstream_days=pending_days)
     out.log.record(outcome)
