@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
-from quantime_core import parquet_io
+from quantime_core import detmath, parquet_io
 
 #: 纯业务列的固定列序（§5.1「固定列序与 dtype」）。
 PAYLOAD_COLUMNS: tuple[str, ...] = ("symbol", "ts", "open", "high", "low", "close", "volume")
@@ -87,11 +87,16 @@ def generate_payload(
     shocks = rng.normal(loc=0.0, scale=sigma, size=(symbols, days))
     hi_noise = np.abs(rng.normal(loc=0.0, scale=0.01, size=(symbols, days)))
     lo_noise = np.abs(rng.normal(loc=0.0, scale=0.01, size=(symbols, days)))
-    volume = rng.lognormal(mean=12.0, sigma=1.0, size=(symbols, days))
+    # `rng.lognormal` 内部对每个样本调 `exp`，落在 numpy 按 CPU 分派的 SVML 核上；
+    # 显式写成 `detmath.exp(rng.normal(...))` 才跨 runner 逐位一致（QNT-40）。
+    # 抽取的随机流与 `rng.lognormal(mean, sigma)` 完全一致——后者定义即 exp(normal)。
+    volume = detmath.exp(rng.normal(loc=12.0, scale=1.0, size=(symbols, days)))
 
     # mu=0 的 GBM：close_t = close_{t-1} · exp(-σ²/2 + σ·z)
+    # `detmath.exp` 而非 `np.exp`：后者在 AVX-512 runner 上走 `__svml_exp8`，
+    # 与 AVX2 runner 的结果差 1 ULP，直接改变 payload_sha256（QNT-40 根因）。
     log_steps = -0.5 * sigma**2 + shocks
-    close = INITIAL_PRICE * np.exp(np.cumsum(log_steps, axis=1))
+    close = INITIAL_PRICE * detmath.exp(np.cumsum(log_steps, axis=1))
 
     # open = prev_close（首日 open = 初始价）
     open_ = np.empty_like(close)

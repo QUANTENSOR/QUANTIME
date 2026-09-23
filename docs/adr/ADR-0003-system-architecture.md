@@ -11,6 +11,7 @@ research:
   - docs/research/other-markets-survey.md（QNT-26，PR #4，verify-b 审中）
 task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 ai_task_describe @ 9976805）
 revised: 2026-09-20（verify-a 第一轮：§5 基准协议、§4.1 单源不变量、§4.2 重放硬验收、allowlist 分层位置；第二轮：R1/R3/R4 校验边界、payload/content hash 分离、逐请求 fail-closed、§3.3 改为待批准提案）
+amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）
 ---
 
 # ADR-0003 系统架构（PROPOSED）
@@ -82,14 +83,20 @@ docs/{adr,research,ops}
 systemd/                           # unit 模板（*.tpl），值由 op 注入
 ```
 
+> 编者说明（QNT-41，2026-09-21）：§3.3 已获 owner 2026-09-21 批准（5A），`allowlist.py` 随 QNT-27 创建。
+
 命名规则：Python 包名前缀 `quantime_`；每个 package 独立 `pyproject.toml`，互相依赖只允许**向下**（`api → {factors,backtest,portfolio,execution,risk,data} → core`；`execution/risk` 不得 import `backtest`；`data` 不得 import 任何上层）。依赖方向由 CI 的 import-linter 规则守卫（实现卡 QNT-27）。
 
 ### 3.3 host allowlist 的装配位置（**迁移提案，批准前不实施**）
 
 现行规则 crypto-boundaries ① 写的是 `execution/allowlist.py`，但 §3 分层要求 `data`（摄取入口）不得 import `execution`。两者冲突。本节是**提案**：本 ADR 为 PROPOSED，不能覆盖现行 rules（AGENTS.md §1：草案不是许可）；在 owner 批准 §9.10 之前，crypto-boundaries ①② 原文继续有效，任何实现卡不得按本节建 `core/allowlist.py`。批准后，迁移由 QNT-27 在**同一个 PR** 内完成两件事：建 `core/allowlist.py` + 回写 `.claude/rules/crypto-boundaries.md` ① 的路径与 ② 的字段名，使 rules 与代码同刻一致。
 
+> 编者说明（QNT-41，2026-09-21）：owner 已于 2026-09-21 裁决 5A 批准本迁移；'批准前不实施'状态已解除。rules 回写由 QNT-39（PR #9）独立完成，`core/allowlist.py` 文件由 QNT-27 随骨架创建，两者非同一 PR；此为对本节'由 QNT-27 在同一个 PR 内完成两件事'的实施方式变更，边界语义不变。
+
 提案内容：
 - `packages/core/allowlist.py` 只含纯数据 + 纯函数，无网络、无凭据读取：`ALLOWLIST: tuple[HostEntry, ...]`，`HostEntry(host, public_readonly: bool, exchange, doc_url, demo_marker: DemoMarker | None)`。字段名**沿用 rules 原文 `public_readonly=true/false`**（不引入 `kind` 枚举，避免迁移时两套口径）；`public_readonly=False` 的条目即 ADR-0001 D1.7 交易 host 集合。`assert_trading_host(host)` 只放行 `public_readonly=False` 条目；`assert_public_readonly_host(host)` 只放行 `public_readonly=True` 条目；两者互不放行。
+
+> 编者说明（QNT-41，2026-09-21）：§3.3 正文的 `packages/core/allowlist.py` 为简写，实际完整路径为 §3.2 骨架所示 `packages/core/quantime_core/allowlist.py`（QNT-39 rules 回写与 QNT-27 实现均按完整路径）
 - `execution` 侧的 fail-closed 分两层，**启动检查不是请求边界**：
   - 启动层 `execution/startup.py`：对所有配置的交易 host 调 `assert_trading_host`，任一失败即退出（D1.7）。
   - **请求层** `execution/paper/base.py`：所有交易/账户/资金类 HTTP 与 WS 连接必须经唯一出口 `PaperTransport.send(request)`，该出口对**每个请求**重新执行 `assert_trading_host(request.host)`，并按条目的 `demo_marker` 逐请求校验：OKX 条目要求请求头 `x-simulated-trading: 1` **且** 注入的 key 标签含 `demo`（标签由 `op` 注入的字段读取，`.strip()` 后比较）；Bitget 条目要求 `paptrading: 1`。头缺失/值错误/标签不符任一不满足 → 抛 `TradingBoundaryError`，请求**不发出**（D1.7 "缺一 fail-closed" 的逐请求形态）。CI 规则：`packages/execution/**` 内除 `PaperTransport` 外不得直接 import `httpx`/`websockets`（import-linter），确保没有绕过出口的第二条路径。变异验收：删掉 OKX 头或改 key 标签，对应测试必须由绿变红。
@@ -209,6 +216,8 @@ data/
 8. **公司行为与期权调整数据源**：美股期权 OCC 调整、分红拆股因子的免费公开源许可尚未逐一核到一手原文（QNT-26 §4）；`adjust_factor` schema 已定但美股填充源待 Stage 3 调研卡。
 9. **ADR-0001 未决项**（D1.8 transfer 权限、Bybit demo 公共行情主网 host、D1.9 合规表述）仍未闭合；本 ADR §3.3 的 `public_readonly=True` allowlist 条目是对第 2 条的架构侧回应，法律/政策项不在本文范围。
 10. **crypto-boundaries ① 路径迁移（待批准，批准前不实施）**：rules 文件写 `execution/allowlist.py`，本 ADR §3.3 提案放到 `core/allowlist.py`（否则 `data` 必须 import `execution`，违反 §3 分层）。语义（单一 allowlist、附官方文档链接、`public_readonly=true` 例外、字段名）不变，仅物理位置不同。owner 批准后由 QNT-27 在同一 PR 内建文件 + 回写 rules ①；未批准则 QNT-27 退回把 allowlist 建在 `execution/`，并让 `data` 通过 `core` 里的一个 Protocol 注入校验函数（绕开 import 方向），边界不变但多一层装配。
+
+> 编者说明（QNT-41，2026-09-21）：owner 已于 2026-09-21 裁决 5A 批准本迁移；'批准前不实施'状态已解除。rules 回写由 QNT-39（PR #9）独立完成，`core/allowlist.py` 文件由 QNT-27 随骨架创建，两者非同一 PR；此为对本节'由 QNT-27 在同一个 PR 内完成两件事'的实施方式变更，边界语义不变。
 13. **ADR-0001 D1.7 OKX/Bitget 请求头校验层次**：D1.7 写"校验请求头"，未写在哪一层；本 ADR §3.3 明确为逐请求 fail-closed，并将 OKX/Bitget 适配器推到二期（第一阶段只有 Binance testnet transport）。是否回写 D1.7 措辞待 owner。
 11. **fixtures 数据口径**：QNT-23 卡面写"仓库只放小样本合成/公开数据"，AGENTS.md §2 写"`fixtures/` 只放合成数据"；本 ADR §1 与 §3.2 按 AGENTS.md（仅合成）执行，公开数据只经摄取进入 `data/`。卡面措辞由 planner 在卡上修正。
 12. **ADR-0002 D2.6 raw 分文件粒度**：D2.6 写 `source/quote_date`，本 ADR §4.1 用 `raw/<source>/<batch_id>/`（batch 内可再按日期分文件）；`source` 仍是第一层，D2.5 整体删源不受影响。是否回写 D2.6 措辞随第 4 条一并裁决。

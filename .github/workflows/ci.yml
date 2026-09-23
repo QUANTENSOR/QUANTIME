@@ -87,3 +87,45 @@ jobs:
 
       - name: Bench input reproducibility (ADR-0003 §5.1)
         run: uv run python fixtures/bench/bench_gen.py --check-expected
+
+  # QNT-40：payload_sha256 曾在 AVX-512 runner 上与 AVX2 runner 不同（np.exp 按 CPU 分派到
+  # 不同 SVML 核）。单机测不出跨 CPU 漂移，所以固定跑一组 CPU 特性不同的 runner。
+  bench-repro:
+    name: Bench reproducibility across CPU dispatch (QNT-40)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            mask: ""
+          - runner: ubuntu-latest
+            mask: "AVX512F,AVX512CD,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL"
+          - runner: ubuntu-latest
+            mask: "AVX2,FMA3,AVX512F,AVX512CD,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL"
+          - runner: ubuntu-24.04
+            mask: ""
+          - runner: ubuntu-22.04
+            mask: ""
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.14 and sync workspace
+        run: uv sync --frozen --python 3.14
+
+      - name: Record CPU dispatch features
+        run: |
+          grep -m1 'model name' /proc/cpuinfo
+          grep -o -E 'avx512[a-z0-9_]*|avx2|fma' /proc/cpuinfo | sort -u | tr '\n' ' '; echo
+          echo "NPY_DISABLE_CPU_FEATURES=${{ matrix.mask }}"
+
+      - name: payload_sha256 must equal EXPECTED.json on every CPU
+        env:
+          NPY_DISABLE_CPU_FEATURES: ${{ matrix.mask }}
+        run: uv run python fixtures/bench/bench_gen.py --check-expected
