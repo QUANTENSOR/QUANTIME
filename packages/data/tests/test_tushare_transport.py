@@ -26,6 +26,7 @@ from quantime_data.transport import (
     SecretValue,
     TransportBoundaryError,
     TushareApiError,
+    assert_api_names_within_authority,
     assert_credentialed_post_url,
     assert_readonly_api_name,
     is_rate_limited,
@@ -356,3 +357,76 @@ def test_request_body_is_byte_for_byte_deterministic():
     t1.post(URL, **kw)
     t2.post(URL, **{**kw, "params": {"ts_code": "000001.SZ", "end_date": "20260930"}})
     assert o1.calls[0][1] == o2.calls[0][1]
+
+
+# ---- 构造闸：调用方给的 api_names 只能是权威枚举的子集（QNT-48 返工 / verify-b P1）----
+
+
+def test_caller_cannot_widen_the_gate_with_a_trading_lookalike():
+    """verify-b 复现的那条路径：传 `{"daily_order"}` 必须在**构造点**就抛。
+
+    原实现收下任意名单，这一句能跑通并真的把 `daily_order` 连同 token 发出去。
+    """
+    opener = FakeOpener(Response(200, ok_body()))
+    with pytest.raises(TransportBoundaryError, match="超出权威只读枚举"):
+        CredentialedTransport(opener, SecretValue(FAKE_TOKEN), api_names=frozenset({"daily_order"}))
+    assert opener.calls == [], "构造就该失败，不该有任何请求发出"
+
+
+def test_caller_cannot_append_an_unknown_name_to_the_authoritative_set():
+    """超集同样拒绝——「权威枚举 + 我再加一个」是最像合规的扩权写法。"""
+    with pytest.raises(TransportBoundaryError, match="dailyx"):
+        CredentialedTransport(
+            FakeOpener(Response(200, ok_body())),
+            SecretValue(FAKE_TOKEN),
+            api_names=TUSHARE_READONLY_API_NAMES | {"dailyx"},
+        )
+
+
+def test_narrowing_to_a_legitimate_subset_still_gates_everything_else():
+    """收窄是允许的，而且必须真的生效：只许 `trade_cal` 时 `daily` 也要被拒。"""
+    transport, opener = make_transport(Response(200, ok_body()), api_names=frozenset({"trade_cal"}))
+    transport.post(URL, api_name="trade_cal", fields=("cal_date",))
+    assert len(opener.calls) == 1
+
+    with pytest.raises(TransportBoundaryError, match="不在只读白名单内"):
+        transport.post(URL, api_name="daily", fields=("ts_code",))
+    assert len(opener.calls) == 1, "被拒的请求不该发出去"
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        frozenset({"daily_order"}),
+        frozenset({"stock_basic", "account"}),
+        TUSHARE_READONLY_API_NAMES | {"trade_order"},
+        frozenset({"DAILY"}),  # 大小写不同就是另一个名字，不做归一化
+    ],
+)
+def test_authority_check_rejects_anything_outside_the_enum(names):
+    with pytest.raises(TransportBoundaryError):
+        assert_api_names_within_authority(names)
+
+
+def test_empty_api_names_is_rejected_as_a_config_error():
+    """空集技术上是子集，但一个发不出任何请求的出口只可能是配错了。"""
+    with pytest.raises(TransportBoundaryError, match="为空"):
+        assert_api_names_within_authority(frozenset())
+
+
+def test_every_authoritative_subset_is_accepted():
+    """反证：收窄不能被这条校验误伤，否则源侧就没法只声明自己用的端点。"""
+    import itertools
+
+    names = sorted(TUSHARE_READONLY_API_NAMES)
+    for size in range(1, len(names) + 1):
+        for combo in itertools.combinations(names, size):
+            assert assert_api_names_within_authority(frozenset(combo)) == frozenset(combo)
+
+
+def test_default_api_names_is_the_authoritative_enum_itself():
+    """默认值必须就是权威枚举——否则「默认安全」这句话本身要靠另一处定义来保证。"""
+    import inspect
+
+    sig = inspect.signature(CredentialedTransport.__init__)
+    assert sig.parameters["api_names"].default is TUSHARE_READONLY_API_NAMES

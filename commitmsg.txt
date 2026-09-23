@@ -1,0 +1,18 @@
+QNT-48 返工：api_names 只允许权威枚举的子集（verify-b P1）
+
+verify-b 的 REJECT 成立。`api_names` 原本是个普通默认参数，调用方传
+`frozenset({"daily_order"})` 就能把交易近似名装进白名单——离线可复现，fake opener
+确实收到该端点连同 token。「默认安全、可选放宽」不是闸门，因为放宽不需要任何审批。
+
+按 planner 推荐的方案 B：保留参数（源侧只声明自己用得着的端点仍有价值），但在
+**构造点**校验 `api_names <= TUSHARE_READONLY_API_NAMES`，超集或含未知名直接抛
+TransportBoundaryError。放在构造点而不是 post：一个白名单被悄悄放宽的进程不该先跑
+起来，再看某次请求是否恰好撞上闸门——那取决于调用顺序，测不出来。空集也拒（技术上
+是子集，但一个发不出任何请求的出口只可能是配错了）。
+
+新增 10 条测试：verify-b 那条 exploit 路径构造即抛且 opener 零调用；超集
+`AUTHORITATIVE | {"dailyx"}` 构造即抛；合法子集 `{"trade_cal"}` 下 `daily` 仍被拒
+且不发出；大小写变体不做归一化；穷举全部 31 个子集确认收窄不被误伤；默认值是权威
+枚举本身。
+
+变异验证 8 项全红（原 7 项 + 新增「去掉子集校验」）。fresh 重跑 404 passed。

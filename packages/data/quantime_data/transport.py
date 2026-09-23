@@ -423,6 +423,29 @@ def assert_credentialed_post_url(url: str) -> HostEntry:
     return entry
 
 
+def assert_api_names_within_authority(api_names: frozenset[str]) -> frozenset[str]:
+    """构造闸：调用方给的名单必须是权威枚举的**子集**（QNT-48 返工，verify-b P1）。
+
+    原实现把 `api_names` 当普通默认参数收下，调用方传 `frozenset({"daily_order"})` 就能
+    把交易近似名装进白名单——「默认安全、可选放宽」等于没有闸门，因为放宽不需要任何审批。
+    权威枚举是 `TUSHARE_READONLY_API_NAMES`，它在本模块里，改它要过 CI 静态守卫；
+    调用方只能**收窄**（源侧只用自己需要的那几个端点仍然有价值），一个字都不能加。
+
+    在构造点抛而不是 `post` 时抛：一个白名单被悄悄放宽的进程，不该先跑起来再等某次
+    请求撞上闸门——那时是否撞上取决于调用顺序，测不出来。
+    """
+    extra = api_names - TUSHARE_READONLY_API_NAMES
+    if extra:
+        raise TransportBoundaryError(
+            f"api_names 超出权威只读枚举，拒绝构造: {sorted(extra)}"
+            f"（权威枚举: {sorted(TUSHARE_READONLY_API_NAMES)}；"
+            "调用方只能取子集，新增端点须改 transport 里的权威枚举并确认不是账户/资金/交易类）"
+        )
+    if not api_names:
+        raise TransportBoundaryError("api_names 为空：这个出口不能发出任何请求，应是配置错误")
+    return api_names
+
+
 def assert_readonly_api_name(api_name: str, allowed: frozenset[str]) -> str:
     """端点闸：`api_name` 精确枚举。Tushare 的「端点」在 body 里，闸就必须开在这。"""
     if api_name not in allowed:
@@ -443,6 +466,9 @@ class CredentialedTransport:
 
     token 由本类持有并**只在** `_body` 里拼进请求体；调用方拿不到明文，也无需知道它存在。
     异常文本一律经 `redact`，请求体从不进任何消息。
+
+    `api_names` 只能是 `TUSHARE_READONLY_API_NAMES` 的子集，构造时校验（fail-closed）：
+    调用方可以收窄到自己用得着的端点，但**放宽不了**——否则端点闸就成了调用方自选。
     """
 
     def __init__(
@@ -466,7 +492,7 @@ class CredentialedTransport:
         self._jitter = jitter
         self._min_interval = min_interval
         self._backoff = backoff
-        self._api_names = api_names
+        self._api_names = assert_api_names_within_authority(api_names)
         self._last_request_at: float | None = None
         #: 供测试与运维核对：实际睡过的秒数序列。
         self.sleeps: list[float] = []
