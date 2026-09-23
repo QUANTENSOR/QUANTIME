@@ -1,0 +1,28 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w19375
+nber_id: w19375
+doi: 10.3386/w19375
+title: Tail Risk and Asset Prices
+authors:
+- Bryan Kelly
+- Hao Jiang
+year: 2013
+factor_name: cross-sectional tail-risk loading
+factor_definition: 每月用个股价格崩盘识别共同尾部风险；股票对滞后尾部风险的载荷高则后续收益高。摘要写明该度量由权益数据直接估计。
+family: volatility
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: market_cap
+  frequency: daily
+original_findings:
+  sample_market: 美股；并与 SPX 期权尾部对照
+  sample_period: 摘要称长于期权样本
+  stats: 尾部风险 1σ 预测未来一年市场超额约 +4.5%；高载荷相对低载荷年化三因子 alpha +5.4%（摘要）。
+reproducible: 'yes'
+reproducible_reason: 摘要写明尾部风险由截面收益中的个股崩盘直接估计，期权尾部只是对照、不是输入。日线 OHLCV 与市值可按该定义直接计算。待付费源。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w19375

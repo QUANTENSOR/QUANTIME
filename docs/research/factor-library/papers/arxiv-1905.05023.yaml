@@ -1,0 +1,30 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1905.05023
+arxiv_id: '1905.05023'
+categories:
+- q-fin.PM
+- q-fin.RM
+- q-fin.TR
+title: 'Avoiding Backtesting Overfitting by Covariance-Penalties: an empirical investigation
+  of the ordinary and total least squares cases'
+authors:
+- Adriano Koshiyama
+- Nick Firoozye
+year: 2019
+factor_name: covariance-penalty backtest selection
+factor_definition: 用协方差惩罚（OLS/TLS）在回测参数选择时抑制过拟合，作为数据窥探/高估表现/交叉验证之外的第四类方案。
+family: methodology
+frequency: daily
+required_fields:
+- name: strategy_returns
+  frequency: daily
+original_findings:
+  sample_market: 系统化交易策略回测（摘要）
+  sample_period: 摘要未给
+  stats: 摘要为方法提出，无单一市场 t 值。
+reproducible: partial
+reproducible_reason: 方法可套在任何已有日线策略收益上，本身不是市场因子。
+markets:
+- multi
+url: https://arxiv.org/abs/1905.05023

@@ -1,0 +1,27 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w24877
+nber_id: w24877
+doi: 10.3386/w24877
+title: Risks and Returns of Cryptocurrency
+authors:
+- Yukun Liu
+- Aleh Tsyvinski
+year: 2018
+factor_name: crypto time-series momentum
+factor_definition: 摘要单独点名的时间序列动量：币种自身一段形成期累计收益为正做多、为负做空或减仓。投资者关注是同文并列预测变量，不是该动量因子的输入。
+family: momentum
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: Bitcoin, Ripple, Ethereum（摘要）
+  sample_period: 摘要未给起止年
+  stats: 与股票/外汇/贵金属多数常见因子无暴露；存在强时间序列动量，关注代理也能预测收益（摘要，无 t 值数字）。
+reproducible: 'yes'
+reproducible_reason: 摘要把时间序列动量单独列为加密特有预测因子（滞后收益），与关注代理是并列发现、不是动量因子的输入。Vision OHLCV 的 close
+  可按该定义直接计算。
+markets:
+- crypto
+url: https://www.nber.org/papers/w24877

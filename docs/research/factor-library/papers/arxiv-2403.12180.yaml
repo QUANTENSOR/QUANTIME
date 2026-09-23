@@ -1,0 +1,28 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2403.12180
+arxiv_id: '2403.12180'
+categories:
+- q-fin.TR
+- q-fin.CP
+title: Advanced Statistical Arbitrage with Reinforcement Learning
+authors:
+- Boming Ning
+- Kiseop Lee
+year: 2024
+factor_name: min empirical-reversion-time pairs + RL policy
+factor_definition: 用经验回归时间选配对系数（最小化经验均值回复时间），再用 RL 学开平仓，不再用固定倍标准差阈值。
+family: pairs
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: 摘要未点名；配对统计套利默认股票
+  sample_period: 摘要未给
+  stats: 摘要称相对传统均值回复规则改进，无具体夏普。
+reproducible: 'yes'
+reproducible_reason: 原文经验回归时间与强化学习开平仓都以价差（收盘价）为输入，不另需订单流或新闻。日线 OHLCV 的 close 可按该定义直接计算。待付费源。
+markets:
+- us_equity
+url: https://arxiv.org/abs/2403.12180

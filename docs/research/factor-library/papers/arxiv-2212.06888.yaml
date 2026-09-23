@@ -1,0 +1,34 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2212.06888
+arxiv_id: '2212.06888'
+categories:
+- q-fin.PR
+- q-fin.GN
+title: Fundamentals of Perpetual Futures
+authors:
+- Songrun He
+- Asaf Manela
+- Omri Ross
+- Victor von Wachter
+year: 2022
+factor_name: perpetual funding carry / basis
+factor_definition: 永续相对现货的基差决定资金费：多头按比例向空头支付 funding；无摩擦下有无套利价格，有交易成本时是区间。交易含义：费率为正时空头收取 carry。
+family: carry
+frequency: daily
+required_fields:
+- name: funding_rate
+  frequency: daily
+- name: mark_or_perp_close
+  frequency: daily
+- name: spot_close
+  frequency: daily
+original_findings:
+  sample_market: 加密永续 vs 传统外汇（摘要）
+  sample_period: 摘要未给
+  stats: 加密偏离大于传统外汇，跨币种共动、随时间缩小；隐含套利策略高夏普（摘要）。
+reproducible: partial
+reproducible_reason: 原文用无摩擦无套利价格（及有交易成本时的区间）衡量永续偏离，并据此构造隐含套利；我们只有 Vision funding 与现货/永续 OHLCV，替换为资金费符号或原始基差，不是原文无套利价格。
+markets:
+- crypto
+url: https://arxiv.org/abs/2212.06888

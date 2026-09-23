@@ -1,0 +1,30 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2108.11921
+arxiv_id: '2108.11921'
+categories:
+- q-fin.ST
+title: A Time-Varying Network for Cryptocurrencies
+authors:
+- Li Guo
+- Wolfgang Karl Härdle
+- Yubo Tao
+year: 2021
+factor_name: inter-crypto momentum from return network
+factor_definition: 用收益交叉可预测性与技术相似度建时变网络，谱聚类得社区；社区间分散化，并做币种间动量（赢家社区/节点对输家）。
+family: momentum
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: tech_similarity
+  frequency: daily
+original_findings:
+  sample_market: 加密截面（摘要）
+  sample_period: 摘要未给
+  stats: 跨币动量组合日收益 1.08%；作者称非行为因子驱动（摘要）。
+reproducible: partial
+reproducible_reason: 原文用收益交叉可预测性与技术相似度共同做谱聚类，再在社区上做跨币动量；我们只有 Vision OHLCV，没有技术相似度，替换为仅收益网络上的动量，不是原文因子。
+markets:
+- crypto
+url: https://arxiv.org/abs/2108.11921

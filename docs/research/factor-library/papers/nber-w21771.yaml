@@ -1,0 +1,26 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w21771
+nber_id: w21771
+doi: 10.3386/w21771
+title: Comparing Asset Pricing Models
+authors:
+- Francisco Barillas
+- Jay Shanken
+year: 2015
+factor_name: Bayesian model comparison among traded factors
+factor_definition: 由标准 F 统计量闭式得到贝叶斯定价检验；对候选交易因子的所有子集算模型概率。
+family: methodology
+frequency: monthly
+required_fields:
+- name: traded_factor_returns
+  frequency: monthly
+original_findings:
+  sample_market: 美股因子模型
+  sample_period: 摘要未给
+  stats: HXZ 与 FF 五/六因子都被含动量、月频更新价值与盈利的五/六因子支配（摘要）。
+reproducible: partial
+reproducible_reason: 比较程序可复用，但候选因子集需要会计与动量等完整因子收益，待付费源。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w21771

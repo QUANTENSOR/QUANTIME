@@ -1,0 +1,31 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w15940
+nber_id: w15940
+doi: 10.3386/w15940
+title: 'The Other Side of Value: Good Growth and the Gross Profitability Premium'
+authors:
+- Robert Novy-Marx
+year: 2010
+factor_name: gross profitability (GP/A)
+factor_definition: 毛利率 = 毛利/资产，截面预测力与账面市值比相当；盈者平均收益高于亏者，尽管 BM 更低、市值更大。控制盈利后价值策略增强。
+family: quality
+frequency: monthly
+required_fields:
+- name: gross_profit
+  frequency: monthly
+- name: total_assets
+  frequency: monthly
+- name: market_cap
+  frequency: daily
+- name: book_equity
+  frequency: monthly
+original_findings:
+  sample_market: 美股截面
+  sample_period: 摘要未给
+  stats: GP/A 与 BM 预测力大致相当；控制盈利后价值策略在大盘流动性股上明显增强（摘要）。
+reproducible: 'no'
+reproducible_reason: 需要利润表毛利与资产，超出「日线 OHLCV + 市值」；待财务项付费源。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w15940

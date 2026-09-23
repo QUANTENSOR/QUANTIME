@@ -1,0 +1,33 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2004.07290
+arxiv_id: '2004.07290'
+categories:
+- q-fin.ST
+- q-fin.GN
+title: 'From code to market: Network of developers and correlated returns of cryptocurrencies'
+authors:
+- Lorenzo Lucchini
+- Laura Alessandretti
+- Bruno Lepri
+- Angela Gallo
+- Andrea Baronchelli
+year: 2020
+factor_name: shared-developer return correlation
+factor_definition: 开源开发者若同时贡献多个币的代码，则这些币的收益更相关；约 4% 开发者跨项目，市场反映这种依赖。
+family: network
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: github_contributor_overlap
+  frequency: weekly
+original_findings:
+  sample_market: 开源加密资产
+  sample_period: 摘要未给
+  stats: 4% 开发者跨币；跨项目依赖映射到收益相关（摘要）。
+reproducible: 'no'
+reproducible_reason: 处理变量是 GitHub 贡献重叠，不属于 Vision OHLCV/funding/OI；收益相关可算，但因子本身不可复现。
+markets:
+- crypto
+url: https://arxiv.org/abs/2004.07290

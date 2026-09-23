@@ -301,6 +301,15 @@ mutate "Q28-8 CI 出网点收敛守卫" .github/workflows/ci.yml \
   "'quantime_data/cli\\.py'=>>'quantime_data/'" \
   tests/test_static_guards.py::test_ci_static_guard_egress_scope_is_not_weakened
 
+# ---- QNT-32 因子文献库 ----
+mutate "factor-library: arXiv 必须带 q-fin" scripts/factor_library.py \
+  'if not isinstance(cats, list) or not any(str(c).startswith("q-fin") for c in cats):=>>if False:' \
+  tests/test_factor_library.py::test_validate_rejects_arxiv_without_qfin
+
+mutate "factor-library: 美股 yes 须标待付费源" scripts/factor_library.py \
+  'if "us_equity" in markets and repro == "yes" and "待付费源" not in reason:=>>if False:' \
+  tests/test_factor_library.py::test_validate_rejects_us_yes_without_paid_flag
+
 echo
 echo "== fresh 重跑（还原后全量）=="
 clean

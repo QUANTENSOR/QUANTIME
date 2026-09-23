@@ -1,0 +1,29 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1603.00751
+arxiv_id: '1603.00751'
+categories:
+- q-fin.ST
+- cs.LG
+title: 'Equity forecast: Predicting long term stock price movement using machine learning'
+authors:
+- Nikola Milosevic
+year: 2016
+factor_name: long-horizon 10% up classifier
+factor_definition: 用大量财务指标做机器学习，预测公司价值在较长时期是否上涨超过 10%。
+family: other
+frequency: monthly
+required_fields:
+- name: financial_ratios
+  frequency: monthly
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: 股票（摘要）
+  sample_period: 摘要未给
+  stats: 摘要称能判断 10% 方向，未给准确率数字。
+reproducible: 'no'
+reproducible_reason: 特征是财务报表指标，不是日线 OHLCV+市值。
+markets:
+- us_equity
+url: https://arxiv.org/abs/1603.00751

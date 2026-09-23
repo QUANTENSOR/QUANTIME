@@ -1,0 +1,28 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-1903.06033
+arxiv_id: '1903.06033'
+categories:
+- q-fin.PM
+- q-fin.RM
+title: Altcoin-Bitcoin Arbitrage
+authors:
+- Zura Kakushadze
+- Willie Yu
+year: 2019
+factor_name: altcoin-bitcoin mean-reversion alpha
+factor_definition: 由加密收益的领先动量因子驱动的均值回复：山寨币相对比特币的统计套利 alpha，在收益截面上显著的子集上交易。
+family: reversal
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: 加密资产截面（相对比特币）
+  sample_period: 摘要写 empirical data，未给起止
+  stats: 摘要称该 alpha 在可识别的加密截面上显著，并讨论流动性约束（无 t 值数字）。
+reproducible: 'yes'
+reproducible_reason: 原文 alpha 定义在加密资产收益（动量因子与相对比特币的均值回复）上。Vision OHLCV 的 close 可按该定义直接计算，不换变量。
+markets:
+- crypto
+url: https://arxiv.org/abs/1903.06033

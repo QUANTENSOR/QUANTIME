@@ -1,0 +1,32 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w25882
+nber_id: w25882
+doi: 10.3386/w25882
+title: Common Risk Factors in Cryptocurrency
+authors:
+- Yukun Liu
+- Aleh Tsyvinski
+- Xi Wu
+year: 2019
+factor_name: crypto market-size-momentum three-factor
+factor_definition: 加密三因子：市场（加密市值加权超额）、规模（小市值减大市值）、动量（赢家减输家）。摘要称九个价/量因子多空可被这三因子吸收。
+family: size
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: market_cap
+  frequency: daily
+- name: volume
+  frequency: daily
+  optional: true
+original_findings:
+  sample_market: 加密币截面（摘要：comprehensive list of price- and market-related factors）
+  sample_period: 摘要未给
+  stats: 九个加密因子多空显著；均可被市场+规模+动量三因子模型解释（摘要）。
+reproducible: partial
+reproducible_reason: 动量与市场腿可用 Vision OHLCV 近似；规模腿需要市值/流通量，Vision 归档无 supply，故三因子整体只能部分复现。
+markets:
+- crypto
+url: https://www.nber.org/papers/w25882

@@ -1,0 +1,34 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w28800
+nber_id: w28800
+doi: 10.3386/w28800
+title: 'From Man vs. Machine to Man + Machine: The Art and AI of Stock Analyses'
+authors:
+- Sean Cao
+- Wei Jiang
+- Junbo L. Wang
+- Baozhong Yang
+year: 2021
+factor_name: AI analyst forecast from filings and macro
+factor_definition: 消化财务信息、定性披露与宏观指标的 AI 分析师，与人类分析师比价预测与超额收益；人机结合在软信息上最好。
+family: other
+frequency: daily
+required_fields:
+- name: filings
+  frequency: daily
+- name: macro
+  frequency: monthly
+- name: close
+  frequency: daily
+- name: analyst_forecasts
+  frequency: daily
+original_findings:
+  sample_market: 美股分析师覆盖样本
+  sample_period: 摘要未给
+  stats: AI 胜过多数人类分析师并产生超额；公司复杂、信息高维时 AI 优势更大（摘要）。
+reproducible: 'no'
+reproducible_reason: 需要披露文本、分析师预测与宏观，远超 OHLCV+市值。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w28800

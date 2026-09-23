@@ -1,0 +1,31 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w12986
+nber_id: w12986
+doi: 10.3386/w12986
+title: Durability of Output and Expected Stock Returns
+authors:
+- Joao F. Gomes
+- Leonid Kogan
+- Motohiro Yogo
+year: 2007
+factor_name: durable-minus-service industry portfolio
+factor_definition: 耐用品需求更顺周期，耐用品生产商现金流与股票暴露更高系统风险；用 NIPA 投入产出账户划分耐用品/非耐用/服务组合。
+family: other
+frequency: monthly
+required_fields:
+- name: close
+  frequency: daily
+- name: industry_map_nipa
+  frequency: monthly
+- name: market_cap
+  frequency: daily
+original_findings:
+  sample_market: 美股行业组合
+  sample_period: 摘要未给
+  stats: 多耐用品空服务年化溢价超过 4%；相对市场的多空溢价逆周期（摘要）。
+reproducible: 'no'
+reproducible_reason: 需要 NIPA 投入产出行业映射，不是日线 OHLCV+市值可替代的。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w12986

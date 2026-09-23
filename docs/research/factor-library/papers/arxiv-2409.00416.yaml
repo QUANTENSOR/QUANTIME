@@ -1,0 +1,33 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2409.00416
+arxiv_id: '2409.00416'
+categories:
+- q-fin.PM
+title: Betting Against (Bad) Beta
+authors:
+- Miguel C. Herculano
+year: 2024
+factor_name: betting-against-bad-beta
+factor_definition: beta 分 good/bad（Campbell-Vuolteenaho）；双排序 beta 与 bad-beta，做空坏 beta、保留 BAB
+  的低 beta 暴露。
+family: beta
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+- name: market_cap
+  frequency: daily
+- name: cashflow_news_proxy
+  frequency: daily
+  optional: true
+original_findings:
+  sample_market: 摘要未写市场，按 BAB 文献默认股票
+  sample_period: 摘要未给
+  stats: 改善 BAB 整体表现，成败取决于交易成本控制（摘要）。
+reproducible: partial
+reproducible_reason: 原文用 Campbell-Vuolteenaho 的现金流新闻分解得到 bad-beta，再与 beta 双排序；我们只有日线 OHLCV
+  与市值，没有新闻分解，替换为市场超额收益近似贴现率新闻。待付费源也不能补上该分解。
+markets:
+- us_equity
+url: https://arxiv.org/abs/2409.00416

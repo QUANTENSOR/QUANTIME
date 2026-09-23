@@ -1,0 +1,31 @@
+source_kind: arxiv
+accessed: '2026-09-23'
+id: arxiv-2302.10175
+arxiv_id: '2302.10175'
+doi: 10.3905/jfds.2023.1.130
+categories:
+- q-fin.PM
+- cs.LG
+- q-fin.TR
+title: 'Spatio-Temporal Momentum: Jointly Learning Time-Series and Cross-Sectional Strategies'
+authors:
+- Wee Ling Tan
+- Stephen Roberts
+- Stefan Zohren
+year: 2023
+factor_name: spatio-temporal momentum
+factor_definition: 同一网络同时吃时间序列动量与截面动量特征，一次输出组合内所有资产的交易信号。
+family: momentum
+frequency: daily
+required_fields:
+- name: close
+  frequency: daily
+original_findings:
+  sample_market: 46 个活跃资产组合（摘要）
+  sample_period: 摘要未给
+  stats: 单层全连接即可联合生成信号（摘要）。
+reproducible: partial
+reproducible_reason: 公式只需日线 close；原文 46 资产宇宙未在摘要中映射到 Vision 或美股日线，故标 partial。
+markets:
+- multi
+url: https://arxiv.org/abs/2302.10175

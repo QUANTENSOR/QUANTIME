@@ -1,0 +1,27 @@
+source_kind: nber
+accessed: '2026-09-23'
+id: nber-w20592
+nber_id: w20592
+doi: 10.3386/w20592
+title: . . . and the Cross-Section of Expected Returns
+authors:
+- Campbell R. Harvey
+- Yan Liu
+- Heqing Zhu
+year: 2014
+factor_name: multiple-testing t-hurdle
+factor_definition: 因子发现的多重检验：相关与缺失数据下，新因子应过约 t>3 而非 t>2 的门槛；并给出 1967 至今历史临界值路径。
+family: methodology
+frequency: monthly
+required_fields:
+- name: factor_return_library
+  frequency: monthly
+original_findings:
+  sample_market: 已发表截面因子文献
+  sample_period: 1967 至当时
+  stats: 建议新因子 t-ratio > 3.0（摘要）。
+reproducible: partial
+reproducible_reason: 这是推断规则不是可交易因子；有了日线因子收益库即可套门槛，但「数百因子」的历史库本身待付费源/自建。不标 yes。
+markets:
+- us_equity
+url: https://www.nber.org/papers/w20592
