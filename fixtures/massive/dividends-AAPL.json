@@ -1,0 +1,30 @@
+{
+  "request_id": "00000000000000000000000000000005",
+  "results": [
+    {
+      "cash_amount": 0.26,
+      "currency": "USD",
+      "declaration_date": "2025-07-31",
+      "distribution_type": "recurring",
+      "ex_dividend_date": "2025-08-11",
+      "frequency": 4,
+      "historical_adjustment_factor": 0.997899,
+      "id": "Ed2c9da60abda1e3f0e99a43f6465863c137b671e1f5cd3f833d1fcb4f4eb27fe",
+      "pay_date": "2025-08-14",
+      "record_date": "2025-08-11",
+      "split_adjusted_cash_amount": 0.26,
+      "ticker": "AAPL"
+    },
+    {
+      "cash_amount": 0.25,
+      "currency": "USD",
+      "distribution_type": "recurring",
+      "ex_dividend_date": "2025-05-12",
+      "frequency": 4,
+      "id": "E1b0a1a40b0da5bbd6e3f1a5d8a1d3e2f4c5b6a7980d1e2f3a4b5c6d7e8f90123",
+      "pay_date": "2025-05-15",
+      "ticker": "AAPL"
+    }
+  ],
+  "status": "OK"
+}

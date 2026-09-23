@@ -1,0 +1,68 @@
+{
+  "synthetic": true,
+  "authored_at": "2026-09-23",
+  "issue": "QNT-47 阶段 1",
+  "note": "全部为**手写合成**响应，不是录制。字段名、类型与形状照 Massive 官方文档的 Response Attributes 表与 Sample Response 写；数值是编的，不代表任何真实行情。阶段 2 拿到 key 后会另建脱敏录制件，届时那批走 NON_SYNTHETIC_FIXTURE_DIRS 的逐目录豁免，本目录仍保持合成。",
+  "doc_access_date": "2026-09-23",
+  "doc_sources": [
+    "https://massive.com/docs/rest/stocks/overview",
+    "https://massive.com/docs/rest/options/overview",
+    "https://massive.com/docs/llms.txt"
+  ],
+  "files": [
+    {
+      "file": "equity-daily-AAPL-2024-01.json",
+      "endpoint": "GET /v2/aggs/ticker/{stocksTicker}/range/{multiplier}/{timespan}/{from}/{to}",
+      "doc_url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+      "covers": "正常路径：5 根已排序日线，字段齐全（含 vw / n）"
+    },
+    {
+      "file": "equity-daily-AAPL-unsorted-with-nulls.json",
+      "endpoint": "GET /v2/aggs/ticker/{stocksTicker}/range/{multiplier}/{timespan}/{from}/{to}",
+      "doc_url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+      "covers": "上游行序不保证 + 文档所述的可省字段：`vw`/`n` 缺失记 null，`otc` 缺失即 false"
+    },
+    {
+      "file": "equity-daily-AAPL-empty.json",
+      "endpoint": "GET /v2/aggs/ticker/{stocksTicker}/range/{multiplier}/{timespan}/{from}/{to}",
+      "doc_url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+      "covers": "区间内无成交：文档说明无合格成交则不产出 bar，响应无 `results` 键"
+    },
+    {
+      "file": "splits-AAPL.json",
+      "endpoint": "GET /stocks/v1/splits",
+      "doc_url": "https://massive.com/docs/rest/stocks/corporate-actions/splits",
+      "covers": "两次拆股，故意逆序给出以钉住本地排序"
+    },
+    {
+      "file": "dividends-AAPL.json",
+      "endpoint": "GET /stocks/v1/dividends",
+      "doc_url": "https://massive.com/docs/rest/stocks/corporate-actions/dividends",
+      "covers": "两笔分红；第二笔缺 declaration_date / record_date / historical_adjustment_factor / split_adjusted_cash_amount（可空列）"
+    },
+    {
+      "file": "option-contracts-AAPL-2021-11-19.json",
+      "endpoint": "GET /v3/reference/options/contracts",
+      "doc_url": "https://massive.com/docs/rest/options/contracts/all-contracts",
+      "covers": "单到期日链的三份合约（call/call/put）；一份带 additional_underlyings 嵌套数组；一份缺 correction"
+    },
+    {
+      "file": "option-daily-AAPL211119C00085000.json",
+      "endpoint": "GET /v2/aggs/ticker/{optionsTicker}/range/{multiplier}/{timespan}/{from}/{to}",
+      "doc_url": "https://massive.com/docs/rest/options/aggregates/custom-bars",
+      "covers": "单份合约的三根日线（低流动性，n 很小）"
+    },
+    {
+      "file": "paged-splits-AAPL-page1.json",
+      "endpoint": "GET /stocks/v1/splits",
+      "doc_url": "https://massive.com/docs/rest/stocks/corporate-actions/splits",
+      "covers": "带 next_url 的分页首页；用于钉住「next_url 必须重新过闸」"
+    },
+    {
+      "file": "error-not-authorized.json",
+      "endpoint": "（任意）",
+      "doc_url": "https://massive.com/docs/rest/quickstart",
+      "covers": "status=NOT_AUTHORIZED：不在 OK_STATUSES 里，归一化必须失败而不是返回空表"
+    }
+  ]
+}

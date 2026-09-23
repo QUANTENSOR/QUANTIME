@@ -74,10 +74,96 @@ def _is_comment(hit: str) -> bool:
     return text.lstrip().startswith("#")
 
 
-def test_allowlist_is_the_only_file_with_public_readonly_host_literals():
-    """§3.3：`core/allowlist.py` 是唯一允许出现 `public_readonly=True` host 字面量的文件。"""
-    files = {_relpath(h) for h in _non_test_hits(_grep(r"binance\.vision", PACKAGES))}
+#: allowlist 里登记过的 API host 字面量（ERE）。凡是能当出网目标用的 host，
+#: 都只许出现在 `core/allowlist.py` 一处。
+#:
+#: 刻意只匹配 `api.` 开头的那几个，而不是整个 `massive\.com`：`https://massive.com/docs/…`
+#: 与 `https://massive.com/legal/…` 是**文档与条款链接**，不是出网目标，适配器的文档头必须
+#: 能引用它们（crypto-boundaries ① 反而要求附官方文档链接）。
+ALLOWLISTED_HOST_PATTERN = r"binance\.vision|api\.massive\.com|api\.polygon\.io"
+
+
+def test_allowlist_is_the_only_file_with_allowlisted_host_literals():
+    """§3.3：`core/allowlist.py` 是唯一允许出现 allowlist host 字面量的文件。
+
+    其余模块引用具名条目（`MASSIVE_REST.host`）而不是复制字符串——否则会长出第二份
+    绕过 allowlist 的 host 表，本守卫的 grep 也随之失效。
+    """
+    files = {_relpath(h) for h in _non_test_hits(_grep(ALLOWLISTED_HOST_PATTERN, PACKAGES))}
     assert files <= {"core/quantime_core/allowlist.py"}, f"host 字面量泄漏到: {sorted(files)}"
+
+
+def test_the_allowlist_really_holds_those_literals():
+    """反证：上一条不是空集通过——allowlist.py 里每个 host 家族都确实有字面量。"""
+    hits = _grep(ALLOWLISTED_HOST_PATTERN, PACKAGES / "core" / "quantime_core" / "allowlist.py")
+    assert hits, "allowlist.py 里没有 host 字面量 —— 泄漏测试成了空集通过"
+    for family in ("binance.vision", "api.massive.com", "api.polygon.io"):
+        assert any(family in h for h in hits), f"allowlist 里缺 {family}"
+
+
+#: key 形态的字面量（ERE）。值须 ≥21 字符且含小写字母——`FOO_KEY = "MASSIVE_API_KEY"`
+#: 这种全大写的环境变量名因此不会被误报，而真 key（Massive 的是 32 位混合大小写字母数字）
+#: 会被抓住。ruff format 把 Python 字符串统一成双引号，所以只匹配双引号即可。
+KEY_LITERAL_PATTERN = (
+    r"([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]"
+    r"|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])[A-Za-z0-9_]*[[:space:]]*[=:][[:space:]]*"
+    r'"[A-Za-z0-9_+/.=-]{10,}[a-z][A-Za-z0-9_+/.=-]{10,}"'
+)
+
+
+def test_no_key_shaped_literals_in_packages():
+    """AGENTS.md §3：禁止手抄秘钥。key 只经 `op` 注入，仓库里不得有 key 形态的字面量。"""
+    hits = [h for h in _non_test_hits(_grep(KEY_LITERAL_PATTERN, PACKAGES)) if not _is_comment(h)]
+    assert hits == [], "出现疑似硬编码的凭据字面量:\n" + "\n".join(hits)
+
+
+def test_the_key_literal_guard_is_not_vacuous(tmp_path):
+    """反证：把一条真 key 形态的行写进临时文件，同一条 grep 必须命中。"""
+    probe = tmp_path / "probe.py"
+    probe.write_text('API_KEY = "aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY"\n', encoding="utf-8")
+    assert _grep(KEY_LITERAL_PATTERN, tmp_path), "key 形态守卫抓不到真 key —— 它是空集通过"
+    # 环境变量名不该被误报（否则守卫会被「先加豁免」削弱）。
+    probe.write_text('API_KEY_ENV = "MASSIVE_API_KEY"\n', encoding="utf-8")
+    assert _grep(KEY_LITERAL_PATTERN, tmp_path) == [], "全大写环境变量名被误报"
+
+
+#: 真正的 1Password 引用（`op://<vault>/…`）。行文提到协议名不算；写成字符类使本文件不自我命中。
+OP_REFERENCE_PATTERN = r"op:/[/][A-Za-z0-9_-]+/"
+
+
+def test_op_references_live_only_in_templates_and_docs():
+    """AGENTS.md §3：仓库只跟踪 `*.tpl`（含 `op://` 引用）；代码里不得出现 `op://` 字面量。
+
+    代码里写 `op://…` 等于把凭据位置硬编码进出网路径；`op run --env-file=<tpl>` 才是
+    唯一注入口。`docs/` 允许出现是因为它在**记述**该引用，不会被执行。
+    """
+    tracked = subprocess.run(
+        ["git", "grep", "-lnE", OP_REFERENCE_PATTERN], cwd=REPO, capture_output=True, text=True
+    ).stdout.splitlines()
+    offenders = [
+        t
+        for t in tracked
+        if not t.endswith(".tpl")
+        and not t.startswith("docs/")
+        and t not in {".gitignore", "AGENTS.md"}
+    ]
+    assert offenders == [], f"`op://` 字面量出现在模板与文档之外: {offenders}"
+
+
+def test_the_massive_template_is_tracked_and_holds_only_a_reference():
+    """模板必须在库里（否则 `op run --env-file=` 无从谈起），且只含引用不含值。"""
+    tpl = REPO / "docs" / "ops" / "massive.env.tpl"
+    tracked = subprocess.run(
+        ["git", "ls-files", "docs/ops/massive.env.tpl"], cwd=REPO, capture_output=True, text=True
+    ).stdout.strip()
+    assert tracked, "massive.env.tpl 未被跟踪"
+    text = tpl.read_text(encoding="utf-8")
+    from quantime_data.sources.massive import CREDENTIAL_POINTER
+
+    reference = CREDENTIAL_POINTER.replace("op:", "op:/" + "/", 1)
+    assert f'MASSIVE_API_KEY="{reference}"' in text
+    # 模板里不得出现任何 key 形态的值（只许有 op:// 引用）。
+    assert _grep(KEY_LITERAL_PATTERN, tpl, include="*.tpl") == [], "模板里出现疑似真值"
 
 
 def test_core_imports_no_network_clients():
@@ -126,11 +212,51 @@ NON_SYNTHETIC_FIXTURE_DIRS = {
 }
 
 
+#: 合成 fixture 目录 → 用途。合成性不是靠出现在这个集合里成立的，而是靠目录内的
+#: `synthetic: true` 声明——下一条测试逐目录核对那个声明确实存在。
+SYNTHETIC_FIXTURE_DIRS = {
+    "bench": "QNT-40：确定性基准输入，由 bench_gen.py 生成",
+    "massive": "QNT-47：按公开文档**手写**的合成响应（MANIFEST.json 标 synthetic: true）",
+}
+
+
+def test_every_synthetic_fixture_dir_actually_declares_itself_synthetic():
+    """出现在 SYNTHETIC_FIXTURE_DIRS 里不等于是合成的——目录里必须有那句声明。"""
+    for name in SYNTHETIC_FIXTURE_DIRS:
+        d = REPO / "fixtures" / name
+        declared = any(
+            needle in f.read_text(encoding="utf-8", errors="ignore")
+            for f in d.rglob("*")
+            if f.is_file() and f.suffix in {".json", ".yaml", ".yml", ".py", ".md"}
+            for needle in ("synthetic: true", '"synthetic": true')
+        )
+        assert declared, f"fixtures/{name}/ 未声明 synthetic: true"
+
+
+def test_the_massive_fixtures_declare_their_doc_provenance():
+    """合成件不是录制件，没有 sha256 可核——它能被核对的是「按哪篇文档、哪天写的」。"""
+    import json
+
+    d = REPO / "fixtures" / "massive"
+    manifest = json.loads((d / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert manifest["synthetic"] is True, "手写件必须显式标 synthetic: true"
+    assert manifest["doc_access_date"], "缺访问日期"
+    assert manifest["doc_sources"], "缺文档 URL"
+    for url in manifest["doc_sources"]:
+        assert url.startswith("https://"), url
+    on_disk = {f.name for f in d.glob("*.json")} - {"MANIFEST.json"}
+    assert {e["file"] for e in manifest["files"]} == on_disk, "MANIFEST 与目录内容不一致"
+    for entry in manifest["files"]:
+        assert entry["doc_url"].startswith("https://"), entry["file"]
+        assert entry["endpoint"], entry["file"]
+        json.loads((d / entry["file"]).read_text(encoding="utf-8"))  # 必须是合法 JSON
+
+
 def test_only_the_declared_fixture_dir_holds_non_synthetic_data():
     """录制 fixture 是**逐目录**豁免，不是对 fixtures/ 整体放行。"""
     fixtures = REPO / "fixtures"
     dirs = {p.name for p in fixtures.iterdir() if p.is_dir() and p.name != "__pycache__"}
-    undeclared = dirs - {"bench"} - set(NON_SYNTHETIC_FIXTURE_DIRS)
+    undeclared = dirs - set(SYNTHETIC_FIXTURE_DIRS) - set(NON_SYNTHETIC_FIXTURE_DIRS)
     assert undeclared == set(), (
         f"新 fixture 目录未声明合成性: {sorted(undeclared)}"
         "（合成数据加 `synthetic: true` 头；录制数据须在 NON_SYNTHETIC_FIXTURE_DIRS 注明理由）"
@@ -254,7 +380,7 @@ def test_ci_static_guard_fails_on_the_first_check_not_only_the_last():
     # 逐条把模式替换成必然命中的 `.`，确认每条都能单独打红。
     lines = script.splitlines()
     deny_idx = [n for n, ln in enumerate(lines) if ln.lstrip().startswith("deny ")]
-    assert len(deny_idx) >= 4, f"ci.yml 只有 {len(deny_idx)} 条 deny，期望 4 条"
+    assert len(deny_idx) >= 6, f"ci.yml 只有 {len(deny_idx)} 条 deny，期望 ≥6 条"
     for i in deny_idx:
         mutated = list(lines)
         # 模式可能在同一行，也可能在续行上——两种都换掉第一个引号串。
@@ -264,6 +390,20 @@ def test_ci_static_guard_fails_on_the_first_check_not_only_the_last():
         assert proc.returncode != 0, (
             f"第 {deny_idx.index(i) + 1} 条 deny 命中了却没能把步骤打红:\n{proc.stdout}"
         )
+
+
+def test_ci_static_guard_op_reference_check_can_fail_the_step():
+    """`op://` 那段不是 `deny`（它扫全部被跟踪文件），所以单独钉它也能把步骤打红。"""
+    script = _ci_step_script(CI_STATIC_GUARD_STEP)
+    assert f"git grep -lnE '{OP_REFERENCE_PATTERN}'" in script, "ci.yml 缺少 op:// 守卫"
+    assert _run(script).returncode == 0, "未注入前就是红的"
+    # 把豁免列表换成一个匹配不到任何路径的模式：模板与文档里的 op:// 会随即变成命中。
+    mutated = script.replace(
+        "'\\.tpl$|^docs/|^\\.gitignore$|^AGENTS\\.md$'", "'^__no_such_path__$'"
+    )
+    assert mutated != script, "变异没有生效 —— 豁免模式的写法变了"
+    proc = _run(mutated)
+    assert proc.returncode != 0, f"op:// 守卫命中了却没能把步骤打红:\n{proc.stdout}"
 
 
 # ---- QNT-28：公开只读摄取的出网边界 ----
@@ -312,6 +452,43 @@ def test_public_readonly_path_whitelist_contains_no_trading_endpoint():
     assert bad == [], f"公共只读白名单里出现交易/账户端点: {bad}"
 
 
+#: 交易/账户/资金的**词根**。端点命名各家不同，穷举路径挡不住新上游，所以白名单
+#: 自检按词根来——白名单是放行清单，写错就是直接放行。
+TRADING_WORD_ROOTS = (
+    "order",
+    "account",
+    "position",
+    "balance",
+    "withdraw",
+    "transfer",
+    "trading",
+    "wallet",
+    "funding",
+)
+
+
+def test_keyed_readonly_whitelist_contains_no_trading_endpoint():
+    """QNT-47：需 key 的白名单同样要过这把尺子——它带着凭据，写错的代价更高。"""
+    from quantime_data.keyed_transport import KEYED_READONLY_ALL
+
+    assert KEYED_READONLY_ALL, "白名单为空 —— 本条成了空集通过"
+    bad = [p for p in KEYED_READONLY_ALL if re.search(TRADING_ENDPOINT_PATTERN, p)]
+    assert bad == [], f"需 key 的白名单里出现交易/账户端点: {bad}"
+    rooted = [p for p in KEYED_READONLY_ALL for w in TRADING_WORD_ROOTS if w in p.lower()]
+    assert rooted == [], f"需 key 的白名单里出现交易类词根: {rooted}"
+
+
+def test_keyed_readonly_hosts_are_not_trading_hosts():
+    """带凭据的行情出口的 host 绝不能同时是合法的下单出口（ADR-0001 D1.7）。"""
+    from quantime_core.allowlist import TradingBoundaryError, assert_trading_host
+    from quantime_data.keyed_transport import KEYED_READONLY_PATHS
+
+    assert KEYED_READONLY_PATHS
+    for host in ("api.massive.com", "api.polygon.io"):
+        with pytest.raises(TradingBoundaryError):
+            assert_trading_host(host)
+
+
 def test_ci_static_guard_egress_scope_is_not_weakened():
     """ci.yml 的出网点守卫必须精确到 cli.py：放宽到整个包等于不拦（QNT-28）。"""
     script = _ci_step_script(CI_STATIC_GUARD_STEP)
@@ -322,9 +499,17 @@ def test_ci_static_guard_egress_scope_is_not_weakened():
 
 
 def test_ci_static_guard_step_covers_everything_the_tests_assert():
-    """CI 与本文件不得各自漂移：这里断言的三段范围，ci.yml 里必须都有。"""
+    """CI 与本文件不得各自漂移：这里断言的每一段范围，ci.yml 里必须都有。"""
     script = _ci_step_script(CI_STATIC_GUARD_STEP)
-    for needle in ("UPDATE|DELETE", "api\\.binance\\.com", "/api/v3/(order", "import|from"):
+    for needle in (
+        "UPDATE|DELETE",
+        "api\\.binance\\.com",
+        "/api/v3/(order",
+        "import|from",
+        "api\\.massive\\.com",  # QNT-47：allowlist host 字面量归位
+        "[Kk][Ee][Yy]",  # QNT-47：key 形态字面量
+        "op:/[/][A-Za-z0-9_-]+/",  # QNT-47：op 引用只许在模板与文档里
+    ):
         assert needle in script, f"ci.yml 静态守卫缺少 {needle!r} 这一段"
 
 

@@ -12,8 +12,11 @@ from pathlib import Path
 import yaml
 from quantime_core.paths import AssetClass, Freq
 
-#: 随包分发的默认清单。
+#: 随包分发的默认清单（加密）。
 DEFAULT_UNIVERSE_PATH = Path(__file__).with_name("universe.yaml")
+
+#: 美股 + 美股期权清单（QNT-47）。与加密分文件：两个市场的腿键与 freq 口径不同。
+US_UNIVERSE_PATH = Path(__file__).with_name("universe_us.yaml")
 
 
 class UniverseError(ValueError):
@@ -42,7 +45,14 @@ class Universe:
         raise UniverseError(f"清单无 {ac} 腿")
 
 
-_KEY_TO_ASSET_CLASS = {"spot": AssetClass.SPOT, "perp": AssetClass.PERP}
+#: 清单里的腿键 → `AssetClass`。`equity`/`option` 是 QNT-47 加的美股两腿；
+#: `option` 腿的 `symbols` 是**底层** ticker，合约由参考端点按底层列出。
+_KEY_TO_ASSET_CLASS = {
+    "spot": AssetClass.SPOT,
+    "perp": AssetClass.PERP,
+    "equity": AssetClass.EQUITY,
+    "option": AssetClass.OPTION,
+}
 
 
 def load_universe(path: str | os.PathLike[str] | None = None) -> Universe:

@@ -1,0 +1,16 @@
+{
+  "next_url": "https://api.massive.com/stocks/v1/splits?cursor=c3ludGhldGljLXBhZ2UtMg",
+  "request_id": "00000000000000000000000000000008",
+  "results": [
+    {
+      "adjustment_type": "forward_split",
+      "execution_date": "1987-06-16",
+      "historical_adjustment_factor": 0.0044642,
+      "id": "E00000000000000000000000000000000000000000000000000000000000001",
+      "split_from": 1,
+      "split_to": 2,
+      "ticker": "AAPL"
+    }
+  ],
+  "status": "OK"
+}
