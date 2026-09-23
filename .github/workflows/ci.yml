@@ -44,16 +44,46 @@ jobs:
 
       - name: Static guards (ADR-0002 只 insert / crypto-boundaries ②)
         run: |
-          echo "--- 写入路径不得出现改写语义 ---"
-          ! grep -rEn --include='*.py' 'UPDATE|DELETE|overwrite|mode=.w.' packages/ \
-            | grep -v '/tests/' | grep .
-          echo "--- 非 allowlist 文件不得出现主网 host 字面量 ---"
+          # `set -e` 按 POSIX **不适用于**被 `!` 取反的命令，所以 `! grep ... | grep .`
+          # 这种写法不会让步骤失败——整步的退出码只由最后一条决定，前面几条形同虚设
+          # （QNT-28 变异验证暴露）。改成显式计数：每条检查各自记账，最后一起判。
+          fail=0
+          deny() {  # deny <说明> <ERE 模式> [额外的 grep -v 过滤...]
+            local label="$1" pattern="$2"; shift 2
+            echo "--- $label ---"
+            local hits
+            hits=$(grep -rEn --include='*.py' "$pattern" packages/ \
+                   | grep -v '/tests/' | grep -vP '^[^:]+:\d+:\s*#' || true)
+            for filter in "$@"; do
+              hits=$(printf '%s' "$hits" | grep -v "$filter" || true)
+            done
+            if [ -n "$hits" ]; then
+              printf '%s\n' "$hits"
+              fail=1
+            fi
+          }
+
+          deny "写入路径不得出现改写语义" 'UPDATE|DELETE|overwrite|mode=.w.'
+
           # `grep -rEn` 的输出是 `path:lineno:text`，注释过滤必须剥掉这段前缀再看行首，
           # 否则 `grep -v '^\s*#'` 永远匹配不到（QNT-27 P2：CI run 35566457361 失败点）。
-          # 范围不变（整个 packages/ 非测试代码），只修过滤方式。
-          ! grep -rEn --include='*.py' \
-            'api\.binance\.com|fapi\.binance\.com|api\.bybit\.com|www\.okx\.com|api\.bitget\.com' \
-            packages/ | grep -v '/tests/' | grep -vP '^[^:]+:\d+:\s*#' | grep .
+          # 范围不变（整个 packages/ 非测试代码）。
+          deny "非 allowlist 文件不得出现主网 host 字面量" \
+            'api\.binance\.com|fapi\.binance\.com|api\.bybit\.com|www\.okx\.com|api\.bitget\.com'
+
+          # 公共只读摄取不该认识任何下单/账户/资金路径。`/sapi/` 全段禁（钱包/划转/提币），
+          # `userDataStream` 禁（需 listenKey，属账户面）。
+          deny "交易/账户/资金端点字面量不得出现（QNT-28：摄取只走公共只读）" \
+            '/api/v3/(order|openOrders|allOrders|account|myTrades|userDataStream)|/fapi/v[0-9]+/(order|positionRisk|account|balance|leverage)|/sapi/'
+
+          # 出网点收敛到一处：allowlist / 路径白名单 / 退避都在 transport 上游，
+          # 任何第二个 import 网络客户端的模块都可能绕过它们。
+          # urllib.parse 是纯字符串解析、不出网，所以按子模块匹配而不是整个 urllib。
+          deny "网络客户端只许出现在摄取 CLI 里" \
+            '^\s*(import|from)\s+(httpx|requests|websockets|socket|urllib\.request|http\.client)\b' \
+            'quantime_data/cli\.py'
+
+          exit "$fail"
 
       - name: Bench input reproducibility (ADR-0003 §5.1)
         run: uv run python fixtures/bench/bench_gen.py --check-expected

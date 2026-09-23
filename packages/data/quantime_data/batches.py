@@ -5,9 +5,12 @@
     → 落 raw → 写归一化 Parquet 到临时名（`data/_staging/`，位于所有读侧枚举范围之外）
     → 计算 sha → **原子发布**到最终路径 → 发布清单 JSON → 最后 insert `ingestion_batch` 行
 
-唯一性登记介质：`data/meta/batch_manifest/<batch_id>.json` 的**独占创建**即锁（planner 裁决，
-2026-09-21）；`ingestion_batch` 行仍是最后一步 insert。锁在任何字节落盘之前取得，
-因此同 batch_id 的第二次提交在碰到任何既有文件之前就被拒绝，第一次的落盘结果逐字节不变。
+唯一性登记介质：`data/meta/batch_manifest/<batch_id>.json.lock` 的 `O_CREAT|O_EXCL` **独占
+创建**即锁（planner 裁决，2026-09-21）；`ingestion_batch` 行仍是最后一步 insert。锁在任何
+字节落盘之前取得，因此同 batch_id 的第二次提交在碰到任何既有文件之前就被拒绝，第一次的
+落盘结果逐字节不变。取锁成功返回 `BatchClaim`（含随机 nonce，锁文件只落其 sha256），
+它是**唯一**能让 `commit_batch` 重入同一把锁的凭证——凭 batch_id 重构出的路径不算持有
+（verify-a R1 P1）。
 
 所有**最终**文件（湖 Parquet、清单 JSON、`ingestion_batch` 行）只经
 `parquet_io.publish_*` 发布——先在 `data/_staging/` 完整写入并 close，再 `os.link` 到最终
@@ -23,8 +26,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -191,23 +196,109 @@ def batch_claim_path(batch_id: str) -> str:
     return batch_manifest_path(batch_id) + ".lock"
 
 
-def _claim_batch_id(root: Path, batch_id: str) -> Path:
+@dataclass(frozen=True, slots=True)
+class BatchClaim:
+    """**独占取得**一个 batch_id 的所有权凭证——只能由 `claim_batch_id` 成功那一次产出。
+
+    `nonce` 是取锁时现生成的随机数，只活在返回的这个对象里；锁文件落的是它的
+    **sha256**，不是它本身。两者的分工：
+
+    - 落 digest 而不是 nonce：锁文件全世界可读，若把 nonce 本身写进去，任何第三方读一遍
+      文件就能拼出一个「看起来有效」的凭证——那等于没有凭证（verify-a R1 P1 的同类漏洞）。
+    - 落 digest 而不是什么都不落：凭证必须能**绑定到当前这把锁**。锁文件被删掉重建后，
+      新锁是另一个 nonce，旧凭证的 digest 对不上，于是旧持有者不能凭一个陈旧对象重入。
+
+    因此「持有凭证」= 「当初亲自独占创建了当前这个锁文件」，而不是「知道 batch_id 和 root」
+    ——后者是所有调用方都有的公开信息，用它当凭证等于不校验。
+    """
+
+    batch_id: str
+    path: Path
+    nonce: str = field(repr=False)
+
+    def digest(self) -> str:
+        return hashlib.sha256(self.nonce.encode("ascii")).hexdigest()
+
+
+def _claim_file_contents(batch_id: str, digest: str) -> bytes:
+    """锁文件正文：batch_id + nonce 的 sha256（人可读，便于运维核对遗留锁）。"""
+    return f"batch_id={batch_id}\nnonce_sha256={digest}\n".encode("ascii")
+
+
+def _read_claim_digest(claim_path: Path) -> str | None:
+    """读锁文件里登记的 nonce digest；文件不存在或格式不符 → `None`。"""
+    try:
+        text = claim_path.read_text(encoding="ascii")
+    except OSError, UnicodeDecodeError:
+        return None
+    for line in text.splitlines():
+        key, _, value = line.partition("=")
+        if key == "nonce_sha256":
+            return value
+    return None
+
+
+def _assert_claim_ownership(claim: BatchClaim, batch_id: str, expected_path: Path) -> None:
+    """校验 `claim` 真是**当前这把锁**的所有权凭证；不是 → 拒绝（在任何字节落盘之前）。
+
+    三条都必须成立：类型对（Path 之类的公开可构造值一律不认）、指向的就是本 batch 的锁、
+    锁文件此刻记着的 digest 正是这份凭证的 nonce 的 digest。
+    """
+    if not isinstance(claim, BatchClaim):
+        raise BatchWriteError(
+            f"claim 不是 claim_batch_id 返回的所有权凭证（得到 {type(claim).__name__}）："
+            f"唯一性登记不接受凭 batch_id/路径重构的值"
+        )
+    if claim.batch_id != batch_id or claim.path != expected_path:
+        raise BatchWriteError(
+            f"claim 登记的是 {claim.batch_id!r}，与本次提交的 batch_id={batch_id!r} 不符"
+        )
+    on_disk = _read_claim_digest(expected_path)
+    if on_disk is None:
+        raise BatchWriteError(f"batch_id 的唯一性登记已不存在，拒绝提交: {batch_id}")
+    if on_disk != claim.digest():
+        raise BatchWriteError(f"claim 与当前登记不符（锁已被另一次取得），拒绝提交: {batch_id}")
+
+
+def _claim_batch_id(root: Path, batch_id: str, *, holder: BatchClaim | None = None) -> BatchClaim:
     """在**任何字节落盘之前**独占登记 batch_id；已被登记 → 拒绝。
 
-    唯一性介质是 `data/meta/batch_manifest/<id>.json.lock` 的独占创建（planner 裁决
-    2026-09-21：manifest 目录存在性即锁，`ingestion_batch` 行仍最后 insert）。
+    唯一性介质是 `data/meta/batch_manifest/<id>.json.lock` 的独占创建（`O_CREAT|O_EXCL`，
+    planner 裁决 2026-09-21：manifest 目录存在性即锁，`ingestion_batch` 行仍最后 insert）。
     batch_id 是 ULID、永不复用：崩溃留下的登记不再释放，重跑请用新 batch_id + `rerun_of`。
+
+    `holder` 是调用方**已经独占取得**的同一把锁（`claim_batch_id` 的返回值）：校验通过即
+    重入，不再二次独占创建。校验见 `_assert_claim_ownership`——凭 `batch_id` 重构出来的
+    路径进不来，读一遍锁文件也拼不出凭证。
     """
-    claim = root / batch_claim_path(batch_id)
-    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim_path = root / batch_claim_path(batch_id)
+    if holder is not None:
+        _assert_claim_ownership(holder, batch_id, claim_path)
+        return holder
+    claim_path.parent.mkdir(parents=True, exist_ok=True)
+    nonce = secrets.token_hex(16)
+    digest = hashlib.sha256(nonce.encode("ascii")).hexdigest()
     try:
-        claim.touch(exist_ok=False)
+        fd = os.open(claim_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError as exc:
         raise BatchWriteError(
             f"batch_id 已被登记，拒绝二次提交（append-only，"
             f"重跑请用新 batch_id + rerun_of）: {batch_id}"
         ) from exc
-    return claim
+    try:
+        os.write(fd, _claim_file_contents(batch_id, digest))
+    finally:
+        os.close(fd)
+    return BatchClaim(batch_id=batch_id, path=claim_path, nonce=nonce)
+
+
+def claim_batch_id(root: str | os.PathLike[str], batch_id: str) -> BatchClaim:
+    """公开入口：在自己写任何 batch 相关字节之前先取得唯一性登记。
+
+    摄取链路要在 `commit_batch` 之前就把上游原始字节写进 `data/raw/<batch_id>/`，
+    所以必须能提前取锁；返回的 `BatchClaim` 再作为 `commit_batch(..., claim=...)` 传回去。
+    """
+    return _claim_batch_id(Path(root), batch_id)
 
 
 def commit_batch(
@@ -229,6 +320,7 @@ def commit_batch(
     range_start: dt.datetime | None = None,
     range_end: dt.datetime | None = None,
     columns: tuple[str, ...] | None = None,
+    claim: BatchClaim | None = None,
 ) -> CommittedBatch:
     """把一个归一化表提交为一个新 batch。
 
@@ -236,6 +328,9 @@ def commit_batch(
     原子发布到最终 batch 目录 → 原子发布清单 JSON → 最后 insert `ingestion_batch` 行。
     任一步失败都不会留下已登记但不完整的 batch，也**绝不改动任何既有文件的字节**；
     最终路径上从不出现半写内容，因此并发读侧只会看到「尚未提交」或「完整已提交」。
+
+    `claim` 传的是调用方已经用 `claim_batch_id` **独占取得**的所有权凭证——摄取链路要先
+    写 raw 副本，必须比这里更早取锁。不传就在这里取；传了但不是真凭证即拒绝。
     """
     root = Path(root)
     source = assert_source(source)
@@ -272,7 +367,7 @@ def commit_batch(
     raw_entries = tuple(_file_entry(root, Path(p)) for p in raw_files)
 
     # 唯一性锁：任何字节落盘之前。之后的每一次写都是独占创建。
-    _claim_batch_id(root, batch_id)
+    _claim_batch_id(root, batch_id, holder=claim)
 
     payload = parquet_io.table_to_bytes(final_table)
     batch_dir.mkdir(parents=True, exist_ok=True)

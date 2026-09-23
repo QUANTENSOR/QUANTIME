@@ -1,0 +1,35 @@
+{
+  "files": [
+    {
+      "checksum_file": "spot-BTCUSDT-1d-2026-08.zip.CHECKSUM",
+      "file": "spot-BTCUSDT-1d-2026-08.zip",
+      "sha256": "fd8374a811ac7d3f4144d9c857c4f10796402c178316a25ed0c2f0ca6e16a8c1",
+      "size": 2185,
+      "url": "https://data.binance.vision/data/spot/monthly/klines/BTCUSDT/1d/BTCUSDT-1d-2026-08.zip"
+    },
+    {
+      "checksum_file": "um-BTCUSDT-4h-2026-08.zip.CHECKSUM",
+      "file": "um-BTCUSDT-4h-2026-08.zip",
+      "sha256": "49dce8e4d82b20a288632c245a267ca5715f53ef170ac62915aa00a75491c3aa",
+      "size": 10424,
+      "url": "https://data.binance.vision/data/futures/um/monthly/klines/BTCUSDT/4h/BTCUSDT-4h-2026-08.zip"
+    },
+    {
+      "checksum_file": "um-BTCUSDT-fundingRate-2026-08.zip.CHECKSUM",
+      "file": "um-BTCUSDT-fundingRate-2026-08.zip",
+      "sha256": "7c108b3a02bd6dc7345ca7323e3a49664edcea0afdcf780ffb3b44762c45a964",
+      "size": 896,
+      "url": "https://data.binance.vision/data/futures/um/monthly/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-08.zip"
+    },
+    {
+      "checksum_file": "um-BTCUSDT-metrics-2026-09-15.zip.CHECKSUM",
+      "file": "um-BTCUSDT-metrics-2026-09-15.zip",
+      "sha256": "c2c5ea97fa8a744e7903218081a9b3b0cc58db995a724964f62e5e97ebf5945c",
+      "size": 11645,
+      "url": "https://data.binance.vision/data/futures/um/daily/metrics/BTCUSDT/BTCUSDT-metrics-2026-09-15.zip"
+    }
+  ],
+  "note": "\u53ea\u542b\u54cd\u5e94\u6b63\u6587\u5b57\u8282\uff1b\u8bf7\u6c42/\u54cd\u5e94\u5934\u4e0e cookie \u672a\u5f55\u5236",
+  "recorded_at": "2026-09-21",
+  "synthetic": false
+}

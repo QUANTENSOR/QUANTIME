@@ -1,0 +1,40 @@
+# quantime 摄取标的清单（QNT-28）——**版本控制的固定清单**，不按实时成交量动态选。
+#
+# 动态选标的会让「同参数重跑」不可复现：同一命令在不同日期取到不同 symbol 集合，
+# ADR-0002 的可重放性就只剩形式。清单变更走 PR，diff 即是 provenance。
+#
+# `freqs` 只列 QNT-28 范围内的 K 线周期；取值必须是 `core/paths.py` 的 `Freq` 成员，
+# 且用 Vision 文件名口径（`1mo` 而非 REST 的 `1M`，ADR-0003 §4.1）。
+
+version: 1
+
+# 现货：`data/spot/monthly/klines/<SYMBOL>/<freq>/`
+spot:
+  freqs: ["1h", "4h", "1d"]
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - BNBUSDT
+    - SOLUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - DOGEUSDT
+    - AVAXUSDT
+    - LINKUSDT
+    - LTCUSDT
+
+# USDT 永续（USD-M）：`data/futures/um/monthly/{klines,fundingRate}/`、
+# `data/futures/um/daily/metrics/`（metrics 含 OI，见 §OI 说明）。
+perp:
+  freqs: ["1h", "4h", "1d"]
+  symbols:
+    - BTCUSDT
+    - ETHUSDT
+    - BNBUSDT
+    - SOLUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - DOGEUSDT
+    - AVAXUSDT
+    - LINKUSDT
+    - LTCUSDT
