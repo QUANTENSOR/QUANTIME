@@ -137,6 +137,24 @@ def test_the_ingest_service_runs_the_incremental_mode():
     assert "daily" in joined and "--since-last" in joined, "unit 没走增量模式"
 
 
+def test_the_ingest_service_resumes_from_the_watermark_not_from_yesterday():
+    """QNT-45 R3：unit 不传 `--start`——起点只来自水位线，停机多天后一次补跑取回全部缺口。
+
+    `Persistent=true` 只重放一次错过的触发；若 `--start` 钉在「昨天」，那一次只取昨天。
+    """
+    live = "\n".join(uncommented_lines(unit_text("quantime-ingest@.service")))
+    assert "--start" not in live, "ingest unit 又传了 --start（关机期间的日子会永久缺失）"
+    assert "--end" in live and "--since-last" in live
+
+
+def test_the_report_service_reads_json_fields_via_report_summary():
+    """QNT-45 R4：汇总按 JSON 字段读（`report-summary`），不 grep 报告文本。"""
+    live = "\n".join(uncommented_lines(unit_text("quantime-ingest-report.service")))
+    assert "report-summary" in live, "报告汇总没走 report-summary"
+    assert "grep" not in live, "报告汇总又在 grep JSON（会读到某条序列的 coverage）"
+    assert "--offline" in live and "--extra ingest" not in live, "汇总不该解析依赖或装网络库"
+
+
 def test_the_report_service_neither_writes_nor_goes_online():
     """报告汇总只读本地文件：不给写权限、不给网络。"""
     text = unit_text("quantime-ingest-report.service")

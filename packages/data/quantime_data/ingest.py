@@ -189,6 +189,7 @@ def ingest_one(
     verify_checksum: bool = True,
     adapter: SourceAdapter | None = None,
     retry: object | None = None,
+    from_report: str | None = None,
 ) -> IngestResult:
     """完整摄取一个 spec 并提交为**一个新 batch**。
 
@@ -245,6 +246,7 @@ def ingest_one(
         range_start=min(times),
         range_end=max(times),
         claim=claim,
+        from_report=from_report,
     )
     return IngestResult(
         committed=committed,

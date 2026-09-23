@@ -52,15 +52,19 @@ def test_a_watermark_past_the_requested_end_is_an_empty_increment():
     assert incremental.next_window(spec, dt.datetime(2026, 9, 1, tzinfo=dt.UTC)) is None
 
 
-def test_a_watermark_before_the_requested_start_does_not_widen_the_window():
-    """请求 8 月、水位线停在 7 月：起点仍是 8-01，不会把 7 月补进来。
+def test_a_watermark_before_the_requested_start_extends_the_window_back_to_it():
+    """R3：请求 8 月、水位线停在 7-03：起点是 7-04——停机几天就补几天。
 
-    补历史是 `backfill` 的事，日常增量不该因为水位线落后就悄悄扩大当天的取数量。
+    旧行为（起点被 `--start` 截住）会把 7-04..7-31 永久跳过：水位线随后越过那段，
+    之后的 `--since-last` 再也不会回头。`--start` 被忽略这件事写进说明。
     """
     spec = spot_1d(dt.date(2026, 8, 1), dt.date(2026, 8, 31))
     narrowed = incremental.next_window(spec, dt.datetime(2026, 7, 3, tzinfo=dt.UTC))
     assert narrowed is not None
-    assert (narrowed.start, narrowed.end) == (dt.date(2026, 8, 1), dt.date(2026, 8, 31))
+    assert (narrowed.start, narrowed.end) == (dt.date(2026, 7, 4), dt.date(2026, 8, 31))
+    note = incremental.start_ignored_note(spec, narrowed)
+    assert note is not None and "--start 2026-08-01 被忽略" in note
+    assert "被忽略" in incremental.describe_increment(spec, narrowed)
 
 
 def test_a_non_utc_watermark_is_converted_before_taking_the_date():

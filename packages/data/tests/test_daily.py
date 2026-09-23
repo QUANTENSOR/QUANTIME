@@ -22,6 +22,7 @@ from fixture_source import (
     OI_SPEC,
     SPOT_KLINE_SPEC,
     FixtureFetcher,
+    ScriptedFetcher,
     snapshot,
     spot_1d,
 )
@@ -172,8 +173,10 @@ def test_one_failing_series_does_not_stop_the_others_but_the_run_is_non_zero(roo
 
 
 def test_upstream_404_is_recorded_as_missing_not_retried(root, clock):
+    # 请求日 10-05（10 月第一个周一）：9 月月档已按节奏发布，所以它的 404 是真缺档。
+    spec = spot_1d(dt.date(2026, 8, 1), dt.date(2026, 9, 10)).requested_on(dt.date(2026, 10, 5))
     fetch = FixtureFetcher()
-    out = _run(root, [spot_1d(dt.date(2026, 8, 1), dt.date(2026, 9, 10))], fetch, clock)
+    out = _run(root, [spec], fetch, clock)
     assert clock.slept == []
     assert fetch.urls.count(SEP_URL) == 1
     (series,) = out.report.series
@@ -250,27 +253,6 @@ def _synthetic_july_zip() -> bytes:
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("BTCUSDT-1d-2026-07.csv", "\n".join(rows) + "\n")
     return buf.getvalue()
-
-
-class ScriptedFetcher(FixtureFetcher):
-    """在录制之上叠一层剧本：`extra` 额外可取的 URL，`gone` 当作 404 的 URL。"""
-
-    def __init__(self, *, extra=None, gone=(), **kw) -> None:
-        super().__init__(**kw)
-        self.extra = dict(extra or {})
-        self.gone = set(gone)
-
-    def __call__(self, url: str) -> bytes:
-        base = url.removesuffix(".CHECKSUM")
-        if base in self.gone:
-            self.urls.append(url)
-            raise FileNotFoundError(url)
-        if base in self.extra:
-            self.urls.append(url)
-            if url.endswith(".CHECKSUM"):
-                raise FileNotFoundError(url)  # 合成档无校验文件 = 不可核对，不是错误
-            return self.extra[base]
-        return super().__call__(url)
 
 
 GAP_SPEC = spot_1d(dt.date(2026, 7, 1), dt.date(2026, 8, 31))
@@ -382,14 +364,21 @@ def test_backfill_refuses_a_report_from_another_source(root, clock, gappy, tmp_p
         backfill.plan_backfill(other)
 
 
-def test_backfill_refuses_an_entry_without_a_batch_id(gappy, tmp_path):
+def test_an_entry_without_a_batch_id_becomes_an_ingest_task_from_the_report(gappy, tmp_path):
+    """R5：没有原 batch 可接 → `kind='ingest'` + `from_report`，不伪造 `rerun_of`。"""
     report_path, _ = gappy
     data = json.loads(report_path.read_text(encoding="utf-8"))
     data["series"][0]["batch_id"] = None
     other = tmp_path / "nobatch.json"
     other.write_text(json.dumps(data), encoding="utf-8")
+    (task,) = backfill.plan_backfill(other).tasks
+    assert (task.kind, task.rerun_of) == ("ingest", None)
+    assert task.from_report == other.as_posix()
+
+
+def test_a_rerun_task_without_rerun_of_is_refused():
     with pytest.raises(backfill.IngestError, match="rerun_of"):
-        backfill.plan_backfill(other)
+        backfill.BackfillTask(spec=SPOT_KLINE_SPEC, filename="x.zip", source="s", rerun_of=None)
 
 
 # ---- CLI 接线（不出网：网络出口被替换成录制回放） ----

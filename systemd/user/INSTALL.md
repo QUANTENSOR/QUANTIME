@@ -3,8 +3,15 @@
 本目录只交付**文件**。QNT-45 的任何 agent 都不得在主机上执行下面任何一条命令
 （出差期规则：不改主机、不安装 unit、不启动 timer）。下列步骤**由 owner 回来后逐项执行**。
 
-命令里的 `<SOURCE>` 当前只有一个取值：`binance_vision`。QNT-47（Massive 美股 + 期权）与
-QNT-48（Tushare Pro A 股）接入后，同一套模板换实例名即可，unit 文件不用改。
+命令里的 `<SOURCE>` 当前只有一个取值：`binance_vision`。实例名就是 `--source` 的值。
+
+**换源不是「adapter 实现三个方法、换个实例名」就完事。** CLI 今天的组装写死给公开源：
+`--source` 在 `BUILTIN_ADAPTERS`（`packages/data/quantime_data/adapter.py`）里查 adapter；
+网络出口一律 `PublicTransport(_http_opener())`，`transport.get` 作为 `fetch` 传给通用层；
+spec 由 `_specs_for` 按 `universe.yaml` 的 spot / perp 腿展开，请求日 `as_of` 默认取运行当天。
+QNT-47（Massive）/ QNT-48（Tushare Pro）接入时，除了 adapter 本身，还要在 CLI 里登记该源、
+按源组装它的出口（Tushare 是需凭据的 `CredentialedTransport`，届时 unit 要启用文件末尾的
+`op run` 占位）、必要时扩展清单与 spec 展开。这些落地后，timer 才是「换实例名即可」。
 
 ## 0. 前置检查（只读，不改任何东西）
 
@@ -68,6 +75,13 @@ journalctl --user -u quantime-ingest@binance_vision.service -n 100 --no-pager
 期望：`Main PID: ... (code=exited, status=0/SUCCESS)`，且 journal 里最后一行 JSON 的
 `"outcome": "ok"`、`"coverage": "complete"`。非零退出码 = 本次有失败，先看报告再往下走。
 
+unit 只传 `--end 昨日` + `--since-last`，**不传 `--start`**：起点只来自已提交数据的水位线
+（水位线次日）。首跑没有水位线时只取昨日一天——更早的历史用第 6 节的手动命令回填，
+不要指望 timer 去补。关机几天后 timer 只补跑一次（`Persistent=true` 的语义），那一次从水位线
+取到昨日，停机期间的每一天都会回来。
+
+journal 里若出现 `# note --start ... 被忽略`：手动运行给了 `--start`，但已有水位线，按水位线续取。
+
 当天的报告：
 
 ```sh
@@ -100,14 +114,28 @@ journalctl --user -u quantime-ingest@binance_vision.service -f
 # 每日报告（Markdown 给人看，JSON 给补采读）
 cat ~/quantime/data/reports/$(date -u +%Y-%m-%d)/*.md
 
+# 当天全部报告的汇总（汇总 unit 跑的就是这条；按 JSON 字段读，非 complete 退出码 1）
+cd ~/quantime && uv run --no-sync --offline --package quantime-data \
+  quantime-ingest --root ~/quantime report-summary
+journalctl --user -u quantime-ingest-report.service -n 50 --no-pager
+
 # 运行记录（空增量的那天没有 batch，但有这一条）
 ls ~/quantime/data/runs/
 ```
 
 ## 6. 报告里出现缺口时的补采
 
-报告 `coverage: partial` 说明请求区间内有整档没取到。按那份报告补采，
-写的是 `kind='rerun'` 的**新批次**，被补的批次一个字节都不动：
+报告里每条序列有 `status` 与 `coverage`，整份报告的 `coverage` 是它们的汇总：
+
+| 序列 `status` / `coverage` | 含义 | 要不要补采 |
+|---|---|---|
+| `ok` / `complete` | 取全了 | 不用 |
+| `ok` / `partial` | 取到了一部分，`missing_archives` 列出 404 的归档 | 按报告补采 → `kind='rerun'` + `rerun_of`（接原 batch） |
+| `failed` / `failed` | 整条没写进湖（`batch_id=null`），`error_class` / `attempts` 说明怎么失败的 | 按报告补采 → `kind='ingest'`，batch 清单记 `from_report=<报告路径>` |
+| `pending` / `pending` | 上游按发布节奏还没发布（如 funding 月档在次月第一个周一前），`pending_upstream` 列出区间 | **不用**——不算缺失、不进覆盖率分母，下一次 `--since-last` 自然取回 |
+
+任何一条 `failed`，整份报告与该源的 `coverage` 都是 `failed`，不会是 `complete`。
+按报告补采写的都是**新批次**，被补的批次一个字节都不动：
 
 ```sh
 cd ~/quantime
@@ -123,6 +151,13 @@ uv run --package quantime-data --extra ingest quantime-ingest \
 ```
 
 补完会产出一份新报告，那几条序列应当变成 `coverage: complete`。
+
+没有水位线时手动回填更早的历史（`--start` 只在没有水位线时生效）：
+
+```sh
+cd ~/quantime && uv run --package quantime-data --extra ingest quantime-ingest \
+  --root ~/quantime --source binance_vision daily --start 2026-08-01 --end 2026-08-31
+```
 
 若核对后确认**上游本来就没有**那个归档（不是我们漏采），把它加进
 `packages/data/quantime_data/upstream_missing.yaml` 并**走 PR**——带上核对依据与日期。

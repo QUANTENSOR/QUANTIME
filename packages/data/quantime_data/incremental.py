@@ -6,8 +6,10 @@
 
 推算只有三个结果：
 
-* 从未取过 → 请求区间原样（首次全量）；
-* 水位线在请求区间之内 → 水位线次日起到请求区间末（**只取新的那一段**）；
+* 从未取过 → 请求区间原样（首次全量；`--start` 只在这时生效）；
+* 有水位线 → **水位线次日**起到请求区间末（只取新的那一段）。起点**不再**被 `--start`
+  截住：水位线落在 `--start` 之前（机器停了几天、timer 的 `Persistent=true` 只补跑一次）
+  时，截住就等于把停机那几天永久跳过（QNT-45 R3）。`--start` 被忽略这件事会写进运行记录；
 * 水位线已覆盖请求区间 → `None`，即空增量。空增量**不写 batch**（ADR-0002 不写空批次），
   但仍写一条运行记录（`runlog`），否则「今天跑过且没有新数据」与「今天根本没跑」
   在事后无法区分。
@@ -98,7 +100,10 @@ def watermark(root: str | os.PathLike[str], spec: IngestSpec, source: str) -> dt
 
 
 def next_window(spec: IngestSpec, mark: dt.datetime | None) -> IngestSpec | None:
-    """把请求区间收窄成「水位线之后」的那一段；已无新区间则 `None`。
+    """把请求区间改成「水位线之后」的那一段；已无新区间则 `None`。
+
+    有水位线时起点**只**看水位线（`--start` 不参与）：恢复窗口从水位线延伸到 `--end`，
+    停机多久就补多久，不会被一个「昨天」式的 `--start` 截成一天（QNT-45 R3）。
 
     起点取**水位线当日的次日**：日线级别摄取只跑已收盘的完整日（CLI 的 `--end` 默认为
     UTC 昨日），所以水位线当天一定是取全了的，次日起才是新的。若改成「从头再取一遍」，
@@ -110,7 +115,7 @@ def next_window(spec: IngestSpec, mark: dt.datetime | None) -> IngestSpec | None
     start = mark.astimezone(dt.UTC).date() + dt.timedelta(days=1)
     if start > spec.end:
         return None
-    return spec.with_window(max(start, spec.start), spec.end)
+    return spec.with_window(start, spec.end)
 
 
 def plan_incremental(
@@ -124,6 +129,18 @@ def describe_increment(spec: IngestSpec, narrowed: IngestSpec | None) -> str:
     """一行人类可读的推算说明——直接进运行日志与报告，便于运维复核。"""
     if narrowed is None:
         return f"{spec.describe()} → 空增量（水位线已覆盖请求区间）"
-    if narrowed.start == spec.start:
+    if narrowed is spec:
         return f"{spec.describe()} → 首次全量（无水位线）"
-    return f"{spec.describe()} → 增量 {narrowed.start.isoformat()}..{narrowed.end.isoformat()}"
+    text = f"{spec.describe()} → 增量 {narrowed.start.isoformat()}..{narrowed.end.isoformat()}"
+    note = start_ignored_note(spec, narrowed)
+    return f"{text}（{note}）" if note else text
+
+
+def start_ignored_note(spec: IngestSpec, narrowed: IngestSpec | None) -> str | None:
+    """有水位线时 `--start` 不生效；两者不一致就留一句话，进运行记录（R3）。"""
+    if narrowed is None or narrowed is spec or narrowed.start == spec.start:
+        return None
+    return (
+        f"--start {spec.start.isoformat()} 被忽略：已有水位线，"
+        f"从水位线次日 {narrowed.start.isoformat()} 续取"
+    )

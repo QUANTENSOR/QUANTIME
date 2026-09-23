@@ -308,14 +308,71 @@ mutate "Q45-a 重试之间必须退避" "$DATA/retry.py" \
   packages/data/tests/test_retry.py::test_every_retry_is_preceded_by_an_exponential_wait
 
 mutate "Q45-b 增量只取水位线之后（改成全量重取）" "$DATA/incremental.py" \
-  'return spec.with_window(max(start, spec.start), spec.end)=>>return spec' \
+  'return spec.with_window(start, spec.end)=>>return spec' \
   packages/data/tests/test_incremental.py::test_the_next_window_starts_the_day_after_the_watermark
 
-mutate "Q45-c 补采写新 rerun batch（改成覆盖式 ingest）" "$DATA/daily.py" \
-  'kind=backfill_mod.BACKFILL_KIND,
+# R3：退回「起点 = max(水位线次日, --start)」——unit 若传 `--start yesterday`，停机期间的日子
+#   永远取不回来（verify-a R3 的反例）。
+mutate "Q45-b2 有水位线时 --start 被忽略（R3）" "$DATA/incremental.py" \
+  'return spec.with_window(start, spec.end)=>>return spec.with_window(max(start, spec.start), spec.end)' \
+  packages/data/tests/test_recovery.py::test_since_last_resumes_from_the_watermark_not_from_start
+
+mutate "Q45-c 补采写新 rerun batch（改成 ingest、丢 rerun_of）" "$DATA/daily.py" \
+  'kind=task.kind,
             rerun_of=task.rerun_of,=>>kind="ingest",
             rerun_of=None,' \
   packages/data/tests/test_daily.py::test_backfill_writes_a_new_rerun_batch_and_never_touches_the_original
+
+# R6：补采时改写被补 batch 的已发布字节（往原 part 末尾追加）——kind/rerun_of 都对，
+#   只有「一个字节不动」那条断言能抓到它。
+mutate "Q45-c2 补采不得改写原 batch 的字节（R6）" "$DATA/daily.py" \
+  'out.increments.append(plan.describe())=>>out.increments.append(plan.describe())
+    for _t in plan.tasks:
+        if _t.rerun_of:
+            _m = __import__("json").loads((root / "data/meta/batch_manifest" / f"{_t.rerun_of}.json").read_text())
+            with open(root / _m["parts"][0]["path"], "ab") as _fh:
+                _fh.write(b"\\0")' \
+  packages/data/tests/test_daily.py::test_backfill_writes_a_new_rerun_batch_and_never_touches_the_original
+
+# ---- QNT-45 返修 R1–R5：每项各钉一个变异点 ----
+
+# R1：出口不再包装 httpx 异常——ConnectError 越过出口，外层不认得它，整次运行崩成 traceback。
+mutate "Q45-R1a httpx 异常在出口包成 OSError" "$DATA/cli.py" \
+  'raise TransportIOError(f"网络层故障（{type(exc).__name__}）: {url}: {exc}") from exc=>>raise' \
+  packages/data/tests/test_exit_boundary.py::test_a_network_failure_is_retried_up_to_the_cap_then_fails_the_run
+
+# R1：明确拒绝（403 类）退回「当限流重试」——被 ban 的请求被白白重打 N 次。
+mutate "Q45-R1b 其余 4xx 不重试" "$DATA/transport.py" \
+  'return status in RETRYABLE_STATUS or 500 <= status <= 599=>>return status != 404' \
+  packages/data/tests/test_exit_boundary.py::test_a_definitive_refusal_is_one_request_no_backoff_and_a_failed_run
+
+# R2：不看发布节奏，月档永远算已发布——9 月下旬请求 `2026-09.zip`。
+mutate "Q45-R2 只列已发布的月档" "$DATA/sources/binance_public.py" \
+  'return as_of >= first_monday(nxt.year, nxt.month)=>>return True' \
+  packages/data/tests/test_publication_cadence.py::test_on_2026_09_22_september_is_listed_as_daily_archives_never_as_the_monthly_zip
+
+# R4a：失败序列不拉低覆盖——一成功一失败的运行重新报 complete。
+mutate "Q45-R4a 有失败序列即非 complete" "$DATA/report.py" \
+  'if any(s.coverage == COVERAGE_FAILED for s in counted):
+        return COVERAGE_FAILED=>>counted = [s for s in counted if s.coverage != COVERAGE_FAILED]
+    if not counted:
+        return COVERAGE_PARTIAL' \
+  packages/data/tests/test_recovery.py::test_a_failed_series_is_in_the_report_and_the_run_is_never_complete
+
+# R4b：失败侧的重试不计入 totals.retries（首个 `retries=outcome.retries,` 在 series_failed 里）。
+mutate "Q45-R4b totals.retries 含失败侧" "$DATA/daily.py" \
+  'retries=outcome.retries,=>>retries=0,' \
+  packages/data/tests/test_recovery.py::test_a_failed_series_is_in_the_report_and_the_run_is_never_complete
+
+# R4c：pending 进了分母——funding 月档未发布的那几天把整份报告拉成 partial。
+mutate "Q45-R4c pending 不进覆盖率分母" "$DATA/report.py" \
+  'return self.status != STATUS_PENDING=>>return True' \
+  packages/data/tests/test_publication_cadence.py::test_a_run_before_the_monthly_release_fetches_daily_archives_and_parks_funding
+
+# R5：失败序列不留缺档——补采计划看不到整条失败的序列。
+mutate "Q45-R5 失败序列的缺档进补采计划" "$DATA/daily.py" \
+  'missing_archives=adapter.list_archives(target),=>>missing_archives=(),' \
+  packages/data/tests/test_recovery.py::test_a_single_day_that_failed_entirely_becomes_one_ingest_task
 
 mutate "Q45-d unit 文件注入主网 host 字面量" "systemd/user/quantime-ingest@.service" \
   '[Service]=>>[Service]

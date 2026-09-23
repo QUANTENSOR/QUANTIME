@@ -40,13 +40,19 @@ class SeriesOutcome:
 
     spec: str
     source: str
-    action: str  # ingest / rerun / skipped_empty_increment / failed
+    action: str  # ingest / rerun / skipped_empty_increment / pending_upstream / failed
     batch_id: str | None = None
     rows: int = 0
     retries: int = 0
     missing_upstream: int = 0
     elapsed_seconds: float = 0.0
     error: str | None = None
+    #: 本序列一共发起了几次归档拉取尝试（含重试）；失败序列据此看出「试了几次才放弃」。
+    attempts: int = 0
+    #: 失败的异常类（`RetryExhaustedError(TransportIOError)` 这种形状带上根因）。
+    error_class: str | None = None
+    #: 按发布节奏上游尚未发布、留给下一次 `--since-last` 的天数（不是缺失）。
+    pending_upstream_days: int = 0
 
 
 @dataclass(slots=True)
@@ -59,6 +65,8 @@ class RunLog:
     started_at: dt.datetime
     finished_at: dt.datetime | None = None
     series: list[SeriesOutcome] = field(default_factory=list)
+    #: 运维需要知道的说明（例如「有水位线，`--start` 被忽略」）——只追加，随记录发布。
+    notes: list[str] = field(default_factory=list)
 
     def record(self, outcome: SeriesOutcome) -> None:
         self.series.append(outcome)
@@ -117,6 +125,7 @@ class RunLog:
                 "retries": self.total_retries,
             },
             "series": [asdict(s) for s in self.series],
+            "notes": list(self.notes),
         }
 
     def to_json(self) -> str:

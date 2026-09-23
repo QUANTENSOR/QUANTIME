@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import io
+import zipfile
 from pathlib import Path
 
 from quantime_core.paths import AssetClass, DataType, Freq
@@ -96,3 +98,51 @@ OI_SPEC = IngestSpec(
     start=dt.date(2026, 9, 15),
     end=dt.date(2026, 9, 15),
 )
+
+
+def synthetic_kline_zip(csv_name: str, start: dt.datetime, step: dt.timedelta, count: int) -> bytes:
+    """合成的 K 线归档（测试内生成、不落 fixtures/）：`count` 根等距 K 线，时间戳毫秒。"""
+    rows = []
+    for i in range(count):
+        t0 = int((start + i * step).timestamp() * 1000)
+        t1 = t0 + int(step.total_seconds() * 1000) - 1
+        rows.append(f"{t0},1,2,0.5,1.5,10,{t1},15,7,5,7.5,0")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(csv_name, "\n".join(rows) + "\n")
+    return buf.getvalue()
+
+
+def synthetic_daily_kline(asset_class: str, freq: str, day: dt.date) -> tuple[str, bytes]:
+    """一天的日档（`{symbol}-{freq}-{YYYY-MM-DD}.zip`）：`(url, zip 字节)`。"""
+    step = {"1d": dt.timedelta(days=1), "4h": dt.timedelta(hours=4), "1h": dt.timedelta(hours=1)}
+    count = int(dt.timedelta(days=1) / step[freq])
+    url = bp.kline_daily_url(asset_class, "BTCUSDT", freq, day)
+    start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.UTC)
+    return url, synthetic_kline_zip(
+        f"BTCUSDT-{freq}-{day.isoformat()}.csv", start, step[freq], count
+    )
+
+
+class ScriptedFetcher(FixtureFetcher):
+    """在录制之上叠一层剧本：`extra` 额外可取的 URL，`gone` 当作 404 的 URL。"""
+
+    def __init__(self, *, extra=None, gone=(), **kw) -> None:
+        super().__init__(**kw)
+        self.extra = dict(extra or {})
+        self.gone = set(gone)
+
+    def __call__(self, url: str) -> bytes:
+        base = url.removesuffix(".CHECKSUM")
+        if base in self.gone:
+            self.urls.append(url)
+            raise FileNotFoundError(url)
+        if base in self.extra:
+            self.urls.append(url)
+            pending = self.fail_urls.get(url)
+            if pending:
+                raise pending.pop(0)
+            if url.endswith(".CHECKSUM"):
+                raise FileNotFoundError(url)  # 合成档无校验文件 = 不可核对，不是错误
+            return self.extra[base]
+        return super().__call__(url)

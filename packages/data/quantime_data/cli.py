@@ -14,7 +14,9 @@
             `--audit` 顺带做缺口/重复核查并把报告也经 publish 路径提交为一个 batch
 `daily`     QNT-45 的无人值守入口：`--since-last` 增量 + 退避重试 + 每日核查报告；
             systemd timer 调的就是它，退出码非零即本次有失败
-`backfill`  按一份核查报告补采缺口（`kind='rerun'` 新批次，不覆盖任何已发布文件）
+`backfill`  按一份核查报告补采缺口（新批次：有原 batch 的走 `kind='rerun'` + `rerun_of`，
+            原序列当天整条失败的走 `kind='ingest'` + `from_report`；不动任何已发布文件）
+`report-summary`  按 JSON 字段汇总某天的全部报告（汇总 unit 调它；不出网、不写文件）
 
 `daily` / `backfill` 的逻辑全在 `daily.py`（源无关通用层），本模块只解析参数、
 组装真实网络出口、打印结果。
@@ -41,7 +43,7 @@ from .retry import (
     DEFAULT_MAX_TOTAL_SECONDS,
     RetryPolicy,
 )
-from .transport import PublicTransport, Response, assert_public_readonly_url
+from .transport import PublicTransport, Response, TransportIOError, assert_public_readonly_url
 from .universe import load_universe
 
 #: HTTP 超时（秒）。归档 zip 可以不小，给足时间但不无限等。
@@ -56,6 +58,10 @@ def _http_opener():
     `httpx` 在函数体内 import：模块导入期不碰网络库，离线测试 import 本模块即可。
     不跟随跨 host 重定向：重定向到一个未登记的 host 会绕过 allowlist，
     所以 `follow_redirects=False`，重定向按非 200 状态处理。
+
+    httpx 的异常**不越过这里**：`httpx.HTTPError`（`ConnectError` / `ReadTimeout` /
+    `RemoteProtocolError` …）一律包成 `transport.TransportIOError`（`OSError` 子类），
+    通用层据此退避重试（QNT-45 R1；契约表见 `transport` 模块头）。
     """
     import httpx
 
@@ -73,7 +79,10 @@ def _http_opener():
         # 一旦发生就在发请求**之前**炸掉，而不是靠远端拒绝。
         request = client.build_request("GET", url)
         assert_public_readonly_url(str(request.url))
-        response = client.send(request)
+        try:
+            response = client.send(request)
+        except httpx.HTTPError as exc:
+            raise TransportIOError(f"网络层故障（{type(exc).__name__}）: {url}: {exc}") from exc
         retry_after = response.headers.get("Retry-After")
         return Response(
             status=response.status_code,
@@ -89,9 +98,19 @@ def _fetcher(transport: PublicTransport):
 
 
 def _specs_for(
-    universe, *, datatypes: Sequence[str], start: dt.date, end: dt.date, symbols: Sequence[str]
+    universe,
+    *,
+    datatypes: Sequence[str],
+    start: dt.date,
+    end: dt.date,
+    symbols: Sequence[str],
+    as_of: dt.date | None = None,
 ) -> list[ingest_mod.IngestSpec]:
-    """把清单展开成 spec 列表（顺序确定：腿 → symbol → datatype → freq）。"""
+    """把清单展开成 spec 列表（顺序确定：腿 → symbol → datatype → freq）。
+
+    `as_of` 是请求日：adapter 只列截至这天已发布的归档（R2）。`daily` 不传时由
+    `run_daily` 取运行当天的 UTC 日期；`plan` 默认也取今天，与真实运行口径一致。
+    """
     out: list[ingest_mod.IngestSpec] = []
     for leg in universe.legs:
         for symbol in leg.symbols:
@@ -109,6 +128,7 @@ def _specs_for(
                                 freq=freq,
                                 start=start,
                                 end=end,
+                                as_of=as_of,
                             )
                         )
                 elif leg.asset_class is AssetClass.PERP:
@@ -121,6 +141,7 @@ def _specs_for(
                             freq=Freq.EVENT if datatype is DataType.FUNDING else Freq.M5,
                             start=start,
                             end=end,
+                            as_of=as_of,
                         )
                     )
     return out
@@ -147,8 +168,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in ("plan", "ingest", "daily"):
         p = sub.add_parser(name)
-        p.add_argument("--start", type=_date, required=True, help="起始日 YYYY-MM-DD")
+        if name == "daily":
+            # R3：有水位线时起点只看水位线；`--start` 只是「从未取过」时的初始起点。
+            p.add_argument(
+                "--start",
+                type=_date,
+                default=None,
+                help="初始起始日 YYYY-MM-DD——只在该序列尚无水位线时生效；缺省 = 与 --end 同一天",
+            )
+        else:
+            p.add_argument("--start", type=_date, required=True, help="起始日 YYYY-MM-DD")
         p.add_argument("--end", type=_date, required=True, help="结束日 YYYY-MM-DD（含）")
+        p.add_argument(
+            "--as-of",
+            type=_date,
+            default=None,
+            help="请求日 YYYY-MM-DD：只列截至这天上游已发布的归档（默认 UTC 今天）",
+        )
         p.add_argument(
             "--datatype",
             action="append",
@@ -199,6 +235,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="只打印补采计划，不取任何字节、不写任何文件"
     )
     _add_retry_flags(bf)
+
+    rs = sub.add_parser("report-summary")
+    rs.add_argument(
+        "--date",
+        type=_date,
+        default=None,
+        help="报告日期 YYYY-MM-DD（默认 UTC 今天）",
+    )
     return parser
 
 
@@ -222,6 +266,10 @@ def _retry_policy(args) -> RetryPolicy:
     return RetryPolicy(max_attempts=args.retry_attempts, max_total_seconds=args.retry_max_seconds)
 
 
+def _today() -> dt.date:
+    return dt.datetime.now(dt.UTC).date()
+
+
 def _run_plan(args) -> int:
     universe = load_universe(args.universe)
     specs = _specs_for(
@@ -230,6 +278,7 @@ def _run_plan(args) -> int:
         start=args.start,
         end=args.end,
         symbols=args.symbol or [],
+        as_of=args.as_of or _today(),
     )
     adapter = get_adapter(getattr(args, "source", DEFAULT_SOURCE))
     for spec in specs:
@@ -247,6 +296,7 @@ def _run_ingest(args) -> int:
         start=args.start,
         end=args.end,
         symbols=args.symbol or [],
+        as_of=args.as_of or _today(),
     )
     run_id = args.run_id or new_run_id()
     adapter = get_adapter(getattr(args, "source", DEFAULT_SOURCE))
@@ -318,14 +368,15 @@ def _run_ingest(args) -> int:
 
 
 def _run_daily(args) -> int:
-    """无人值守入口——systemd timer 调的就是它。"""
+    """无人值守入口——systemd timer 调的就是它（unit 只给 `--end`，起点由水位线决定）。"""
     universe = load_universe(args.universe)
     specs = _specs_for(
         universe,
         datatypes=args.datatype or ["kline", "funding", "open_interest"],
-        start=args.start,
+        start=args.start or args.end,
         end=args.end,
         symbols=args.symbol or [],
+        as_of=args.as_of,
     )
     run_id = args.run_id or new_run_id()
     adapter = get_adapter(args.source)
@@ -386,6 +437,8 @@ def _print_run(out: daily_mod.RunOutput) -> None:
                 "ok": out.log.ok_count,
                 "failed": out.log.failed_count,
                 "skipped_empty_increment": out.log.skipped_count,
+                "failed_series": out.report.count("failed"),
+                "pending_series": out.report.count("pending"),
                 "rows": out.log.total_rows,
                 "retries": out.log.total_retries,
                 "report_json": out.report_paths[0] if out.report_paths else None,
@@ -395,14 +448,27 @@ def _print_run(out: daily_mod.RunOutput) -> None:
     )
     for line in out.increments:
         print(f"# {line}", file=sys.stderr)
+    for line in out.log.notes:
+        print(f"# note {line}", file=sys.stderr)
     for line in out.retry_log:
         print(f"# retry {line}", file=sys.stderr)
     for failure in out.report.failures:
         print(f"FAILED {failure}", file=sys.stderr)
 
 
+def _run_report_summary(args) -> int:
+    from .report import summarize_reports
+
+    lines, code = summarize_reports(args.root, args.date or _today())
+    for line in lines:
+        print(line)
+    return code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "report-summary":
+        return _run_report_summary(args)
     if args.command == "plan":
         return _run_plan(args)
     if args.command == "ingest":

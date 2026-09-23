@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pyarrow as pa
 from quantime_core.paths import AssetClass, DataType, Freq
@@ -41,6 +41,11 @@ class IngestSpec:
     freq: Freq
     start: dt.date
     end: dt.date
+    #: 请求日（UTC 日期）——adapter 据此判断「截至今天上游已经发布了哪些归档」
+    #: （`list_archives` 只列已发布的；未发布的日子由通用层记成 `pending_upstream`）。
+    #: `None` = 历史请求，视全部归档已发布。它描述的是**何时**请求而不是请求**什么**，
+    #: 所以不参与相等比较：同一序列同一区间，今天问与明天问是同一个 spec。
+    as_of: dt.date | None = field(default=None, compare=False)
 
     def __post_init__(self) -> None:
         if self.end < self.start:
@@ -65,6 +70,19 @@ class IngestSpec:
             freq=self.freq,
             start=start,
             end=end,
+            as_of=self.as_of,
+        )
+
+    def requested_on(self, as_of: dt.date | None) -> IngestSpec:
+        """同一序列同一区间，换一个请求日。"""
+        return IngestSpec(
+            datatype=self.datatype,
+            asset_class=self.asset_class,
+            symbol=self.symbol,
+            freq=self.freq,
+            start=self.start,
+            end=self.end,
+            as_of=as_of,
         )
 
 
@@ -93,6 +111,12 @@ def month_bounds(label: str) -> tuple[dt.date, dt.date]:
     first = dt.date(year, month, 1)
     nxt = dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
     return first, nxt - dt.timedelta(days=1)
+
+
+def first_monday(year: int, month: int) -> dt.date:
+    """该月第一个周一。Binance Vision 的月归档在「次月第一个周一」发布（调研 §4.5）。"""
+    first = dt.date(year, month, 1)
+    return first + dt.timedelta(days=(7 - first.weekday()) % 7)
 
 
 def days_between(start: dt.date, end: dt.date) -> Iterator[dt.date]:

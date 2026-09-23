@@ -13,8 +13,9 @@ Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INST
 # 夏令时漂移会让某一天摄取两次、另一天一次都没有。
 OnCalendar=*-*-* 02:30:00 UTC
 
-# 错过就补跑（关机、休眠、机器不在线）。没有它，一次关机就是数据里一个永久的洞——
-# 而增量水位线会把那个洞跳过去，第二天看不出来。
+# 错过就补跑（关机、休眠、机器不在线）。注意语义：不论错过几次，开机后只补跑**一次**。
+# 真正把缺的每一天找回来的是 service 的 `--since-last`：它从水位线次日取到昨日，
+# 所以这一次补跑覆盖整段停机期（QNT-45 R3）。Persistent 只保证「开机后不必等到次日」。
 Persistent=true
 
 # 0–20 分钟随机延迟：所有实例（以及将来 QNT-47/48 的源）不在同一秒撞上游。

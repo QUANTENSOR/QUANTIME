@@ -1,13 +1,20 @@
 """缺口补采（QNT-45 第 3 项）——**源无关**：从核查报告读缺档，按新 batch 补回。
 
-输入是 `--backfill-from-report <path>` 指的那份 JSON 报告（`report.py` 生成的那一份）。
-报告里每条序列都带足够的字段重建 `IngestSpec`，以及该序列 `missing_upstream` 的文件名。
+输入是 `--backfill-from-report <path>` 指的那份 JSON 报告（`report.py` 生成的那一份，
+schema v2）。报告里每条序列都带足够的字段重建 `IngestSpec`（含请求日 `as_of`），以及
+**结构化的缺档清单** `missing_archives`（url / filename / covers_start / covers_end）。
+两类序列都产出任务（QNT-45 R5）：
+
+* `status=ok` 且有整档缺失 → 每个缺档一个 `kind='rerun'`、`rerun_of=<原 batch_id>` 的任务；
+* `status=failed`（当天一行都没进湖，没有原 batch）→ 每个缺档一个 `kind='ingest'` 的任务，
+  batch 清单 JSON 记 `from_report=<报告路径>`。不造空 batch 去凑一个 `rerun_of`。
+
 补采做三件事：
 
-1. 把文件名映射回一段日期区间——**问 adapter**（`list_archives` 给的 `Archive` 自带
-   覆盖区间），所以「月归档还是日归档」这件事补采完全不需要知道；
+1. 缺档的日期区间直接取自报告（`covers_start..covers_end`），并与 adapter 按同一请求日
+   重列的归档**核对**——口径不一致就拒绝盲补；
 2. 过滤掉 `upstream_missing.yaml` 里已被人工核实为「上游确实没有」的文件——它们不再重试；
-3. 剩下的经 `ingest_one(kind='rerun', rerun_of=<原 batch_id>)` 补回。
+3. 剩下的经 `ingest_one` 补回。
 
 **补采写的是新 batch，不是覆盖。** 被补的那个 batch 的每个字节保持不变，两者由
 `rerun_of` 连起来（ADR-0002 D2.1）。写成覆盖会把「当时取到的是什么」这个事实抹掉，
@@ -30,21 +37,34 @@ from .report import load_report
 from .spec import Fetcher, IngestError, IngestSpec
 from .upstream_missing import UpstreamMissing, load_upstream_missing
 
-#: 补采提交的 batch kind——**始终** `rerun`，且必带 `rerun_of`。
+#: 补有原 batch 可接的缺口时的 batch kind——必带 `rerun_of`。
 BACKFILL_KIND = "rerun"
+#: 原序列当天整条失败、没有 batch 可接时的 kind——带 `from_report`，不带 `rerun_of`。
+FIRST_FILL_KIND = "ingest"
 
 
 @dataclass(frozen=True, slots=True)
 class BackfillTask:
-    """一个待补的归档：补哪个文件、补哪段区间、补的是哪个 batch 的缺口。"""
+    """一个待补的归档：补哪个文件、补哪段区间、接在哪个 batch 之后（或出自哪份报告）。"""
 
     spec: IngestSpec
     filename: str
     source: str
-    rerun_of: str
+    rerun_of: str | None
+    kind: str = BACKFILL_KIND
+    from_report: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind == BACKFILL_KIND and not self.rerun_of:
+            raise IngestError(f"kind='rerun' 的补采必须带 rerun_of（{self.filename}）")
+        if self.kind == FIRST_FILL_KIND and (self.rerun_of or not self.from_report):
+            raise IngestError(
+                f"无原 batch 的补采必须是 kind='ingest' + from_report（{self.filename}）"
+            )
 
     def describe(self) -> str:
-        return f"{self.filename} → {self.spec.describe()}（rerun_of={self.rerun_of}）"
+        link = f"rerun_of={self.rerun_of}" if self.rerun_of else f"from_report={self.from_report}"
+        return f"{self.filename} → {self.spec.describe()}（kind={self.kind}，{link}）"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +95,7 @@ def spec_from_series(entry: dict) -> IngestSpec:
             freq=Freq(entry["freq"]),
             start=dt.date.fromisoformat(entry["range_start"]),
             end=dt.date.fromisoformat(entry["range_end"]),
+            as_of=dt.date.fromisoformat(entry["as_of"]) if entry.get("as_of") else None,
         )
     except (KeyError, ValueError) as exc:
         raise IngestError(f"报告条目无法重建 spec: {exc}") from exc
@@ -90,16 +111,18 @@ def plan_backfill(
 
     每个缺档单独成一个 task 而不是把整条序列重取一遍：报告说缺的是那一个月，重取整个
     区间会把已经取好的月份也重下一遍，还会写出一个区间与缺口无关的 batch。
+    失败序列的缺档 = 它区间内全部已发布归档（一行都没进湖）；成功序列的缺档 = 那几个 404。
     """
     adapter = adapter if adapter is not None else get_adapter()
     whitelist = whitelist if whitelist is not None else load_upstream_missing()
     data = load_report(report_path)
+    report_ref = Path(report_path).as_posix()
 
     tasks: list[BackfillTask] = []
     skipped: list[SkippedTask] = []
     for entry in data.get("series", []):
-        names = entry.get("missing_upstream") or []
-        if not names:
+        archives = entry.get("missing_archives") or []
+        if not archives:
             continue
         source = entry["source"]
         if source != adapter.name:
@@ -109,7 +132,9 @@ def plan_backfill(
             )
         spec = spec_from_series(entry)
         by_name = {a.filename: a for a in adapter.list_archives(spec)}
-        for name in names:
+        rerun_of = entry.get("batch_id")
+        for recorded in archives:
+            name = recorded["filename"]
             if whitelist.is_known_missing(source, name):
                 skipped.append(
                     SkippedTask(
@@ -120,20 +145,34 @@ def plan_backfill(
                 )
                 continue
             archive = by_name.get(name)
-            if archive is None:
+            if archive is None or (
+                archive.covers_start.isoformat(),
+                archive.covers_end.isoformat(),
+            ) != (recorded["covers_start"], recorded["covers_end"]):
                 raise IngestError(
-                    f"报告里的缺档 {name!r} 不在 adapter 对该 spec 列出的归档里"
+                    f"报告里的缺档 {name!r} 与 adapter 按同一请求日列出的归档对不上"
                     f"（{spec.describe()}）——报告与 adapter 口径不一致，拒绝盲补"
                 )
-            rerun_of = entry.get("batch_id")
-            if not rerun_of:
-                raise IngestError(f"报告条目缺 batch_id，补采无法填 rerun_of（{spec.describe()}）")
+            # 补的区间 = 缺档覆盖区间 ∩ 原请求区间（月档可能超出一个增量窗口的两端）。
+            window = spec.with_window(
+                max(archive.covers_start, spec.start), min(archive.covers_end, spec.end)
+            )
             tasks.append(
                 BackfillTask(
-                    spec=spec.with_window(archive.covers_start, archive.covers_end),
+                    spec=window,
                     filename=name,
                     source=source,
                     rerun_of=rerun_of,
+                    kind=BACKFILL_KIND,
+                )
+                if rerun_of
+                else BackfillTask(
+                    spec=window,
+                    filename=name,
+                    source=source,
+                    rerun_of=None,
+                    kind=FIRST_FILL_KIND,
+                    from_report=report_ref,
                 )
             )
     return BackfillPlan(tasks=tuple(tasks), skipped=tuple(skipped))
@@ -152,8 +191,8 @@ def run_backfill(
 ) -> tuple[list[ingest_mod.IngestResult], list[str]]:
     """执行补采计划。回传 `(成功的结果, 失败说明)`。
 
-    每个 task 都是一次 `kind='rerun'` 的**新 batch**——`rerun_of` 指向报告里那个有缺口的
-    batch。任何一步都不碰已发布的文件。
+    每个 task 都是一次**新 batch**——`kind='rerun'` 的 `rerun_of` 指向报告里那个有缺口的
+    batch；`kind='ingest'` 的清单记 `from_report`。任何一步都不碰已发布的文件。
     """
     root = Path(root)
     adapter = adapter if adapter is not None else get_adapter()
@@ -168,11 +207,12 @@ def run_backfill(
                     fetch,
                     run_id=run_id,
                     now=now,
-                    kind=BACKFILL_KIND,
+                    kind=task.kind,
                     rerun_of=task.rerun_of,
                     verify_checksum=verify_checksum,
                     adapter=adapter,
                     retry=retry,
+                    from_report=task.from_report,
                 )
             )
         except IngestError as exc:

@@ -11,7 +11,8 @@
 [Unit]
 Description=quantime 每日增量摄取（源 %i）
 Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INSTALL.md
-# 没网就别跑：失败一次会污染当天的运行记录，不如等 timer 的 Persistent 补跑。
+# 等网络就绪再跑：没网时每条序列都会退避到重试上限才失败，白白占满重试预算。
+# 真没跑成也不丢数据——下一次运行按水位线从断点续取（见 ExecStart 注释）。
 After=network-online.target
 Wants=network-online.target
 
@@ -19,14 +20,17 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/quantime
 
-# `--since-last` 是这张卡的核心：区间起点按已提交 ingestion_batch 的水位线推算，
-# 每天只取新增的那一段。`--end` 取 UTC 昨日——当日归档上游尚未生成，取了必然 404。
+# `--since-last` 是这张卡的核心：区间起点**只**按已提交 ingestion_batch 的水位线推算
+# （水位线次日），每天只取新增的那一段。**故意不传 `--start`**：关机一周后 timer 只补跑
+# 一次（Persistent=true 只重放一次错过的触发），若起点钉死在「昨天」，那一次只会取
+# 昨天，中间六天永远是洞。从水位线续取，这一次就把六天全取回来（QNT-45 R3）。
+# 没有水位线（首跑）时起点 = `--end`，即只取昨日；历史回填另行手动跑。
+# `--end` 取 UTC 昨日——日档次日才发布，当日的取了必然 404。
 ExecStart=/usr/bin/env sh -c '\
   cd "%h/quantime" && \
   exec uv run --package quantime-data --extra ingest quantime-ingest \
     --root "%h/quantime" --source %i \
     daily --since-last \
-    --start "$(date -u -d "yesterday" +%%Y-%%m-%%d)" \
     --end "$(date -u -d "yesterday" +%%Y-%%m-%%d)"'
 
 # 摄取是 I/O 密集且要让路给交互：低优先级，不和 owner 抢机器。

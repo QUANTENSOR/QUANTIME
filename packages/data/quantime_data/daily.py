@@ -7,10 +7,12 @@
 一次运行（`run_daily`）的形状：
 
     对每条序列：
-      推算增量区间（`--since-last`）—— 空增量则记一笔 skip，不写 batch
+      定请求日（`as_of` = 本次运行的 UTC 日期；adapter 据此只列已发布的归档）
+      推算增量区间（`--since-last`：有水位线就从水位线次日起）—— 空增量则记一笔 skip
+      → 整段都还没发布 → 记 `pending_upstream`，不取、不算失败
       → 带退避重试地摄取（`retry.RetryContext`）
       → 核查刚提交的 batch（缺口 / 重复 / 覆盖）
-      → 记进运行记录与报告
+      → 记进运行记录与报告（**失败的序列同样进报告**，带结构化缺档清单，补采据此重建）
     最后：发布 `data/reports/<date>/<run_id>.{json,md}` 与 `data/runs/<run_id>/run_log.json`
 
 退出码来自运行记录：有任何失败即非零（`runlog.RunLog.exit_code`）。
@@ -22,14 +24,21 @@ import datetime as dt
 import os
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import backfill as backfill_mod
 from . import ingest as ingest_mod
-from .adapter import SourceAdapter, get_adapter
-from .incremental import describe_increment, plan_incremental
-from .report import DailyReport, publish_report, series_from_audit
+from .adapter import Archive, SourceAdapter, get_adapter
+from .incremental import describe_increment, plan_incremental, start_ignored_note
+from .report import (
+    DailyReport,
+    PendingWindow,
+    publish_report,
+    series_failed,
+    series_from_audit,
+    series_pending,
+)
 from .retry import RetryContext, RetryExhaustedError, RetryPolicy
 from .runlog import RunLog, SeriesOutcome, publish_run_log
 from .spec import Fetcher, IngestError, IngestSpec
@@ -62,6 +71,26 @@ def _now(now: dt.datetime | None) -> dt.datetime:
     return (now or dt.datetime.now(dt.UTC)).replace(microsecond=0)
 
 
+def error_class(exc: BaseException) -> str:
+    """失败的分类：重试用尽时把根因也带上（`RetryExhaustedError(TransportIOError)`）。"""
+    name = type(exc).__name__
+    cause = exc.__cause__
+    return f"{name}({type(cause).__name__})" if cause is not None else name
+
+
+def pending_windows(adapter: SourceAdapter, spec: IngestSpec) -> tuple[PendingWindow, ...]:
+    """adapter 声明的「按发布节奏尚未发布」日期段；没实现这个可选方法的源 = 无。"""
+    fn = getattr(adapter, "pending_windows", None)
+    return tuple(fn(spec)) if fn is not None else ()
+
+
+def _archives_named(
+    adapter: SourceAdapter, spec: IngestSpec, names: Sequence[str]
+) -> tuple[Archive, ...]:
+    by_name = {a.filename: a for a in adapter.list_archives(spec)}
+    return tuple(by_name[n] for n in names if n in by_name)
+
+
 def _ingest_series(
     root: Path,
     spec: IngestSpec,
@@ -75,9 +104,11 @@ def _ingest_series(
     rerun_of: str | None,
     verify_checksum: bool,
     monotonic,
+    from_report: str | None = None,
 ) -> tuple[ingest_mod.IngestResult | None, SeriesOutcome, str | None]:
     """摄取一条序列并记账。回传 `(结果, 运行记录条目, 失败说明)`。"""
     before = retry.retries
+    attempts_before = retry.recorder.attempts
     started = monotonic()
     try:
         result = ingest_mod.ingest_one(
@@ -91,6 +122,7 @@ def _ingest_series(
             verify_checksum=verify_checksum,
             adapter=adapter,
             retry=retry,
+            from_report=from_report,
         )
     except (IngestError, RetryExhaustedError) as exc:
         elapsed = monotonic() - started
@@ -104,6 +136,8 @@ def _ingest_series(
                 retries=retry.retries - before,
                 elapsed_seconds=elapsed,
                 error=str(exc),
+                attempts=retry.recorder.attempts - attempts_before,
+                error_class=error_class(exc),
             ),
             message,
         )
@@ -119,8 +153,95 @@ def _ingest_series(
             retries=retry.retries - before,
             missing_upstream=len(result.missing),
             elapsed_seconds=elapsed,
+            attempts=retry.recorder.attempts - attempts_before,
         ),
         None,
+    )
+
+
+def _process_series(
+    root: Path,
+    target: IngestSpec,
+    fetch: Fetcher,
+    *,
+    out: RunOutput,
+    run_id: str,
+    adapter: SourceAdapter,
+    retry: RetryContext,
+    now: dt.datetime,
+    kind: str,
+    rerun_of: str | None,
+    verify_checksum: bool,
+    monotonic,
+    from_report: str | None = None,
+) -> None:
+    """一条序列：待发布判定 → 摄取 → 核查 → 记账。成功、失败、待发布**都进报告**。"""
+    pending = pending_windows(adapter, target)
+    pending_days = sum((b - a).days + 1 for a, b in pending)
+    if not adapter.list_archives(target) and pending:
+        out.log.record(
+            SeriesOutcome(
+                spec=target.describe(),
+                source=adapter.name,
+                action="pending_upstream",
+                pending_upstream_days=pending_days,
+            )
+        )
+        out.report.add(series_pending(target, source=adapter.name, pending_upstream=pending))
+        return
+    result, outcome, failure = _ingest_series(
+        root,
+        target,
+        fetch,
+        run_id=run_id,
+        adapter=adapter,
+        retry=retry,
+        now=now,
+        kind=kind,
+        rerun_of=rerun_of,
+        verify_checksum=verify_checksum,
+        monotonic=monotonic,
+        from_report=from_report,
+    )
+    if pending_days:
+        outcome = replace(outcome, pending_upstream_days=pending_days)
+    out.log.record(outcome)
+    if failure is not None:
+        out.report.failures.append(failure)
+        out.report.add(
+            series_failed(
+                target,
+                source=adapter.name,
+                error_class=outcome.error_class or "",
+                error=outcome.error or "",
+                # 没有 batch 提交 = 区间内每个已发布的归档都没进湖，全部是待补的缺档。
+                missing_archives=adapter.list_archives(target),
+                pending_upstream=pending,
+                retries=outcome.retries,
+                attempts=outcome.attempts,
+                elapsed_seconds=outcome.elapsed_seconds,
+            )
+        )
+        return
+    assert result is not None
+    out.results.append(result)
+    audited = ingest_mod.audit_result(root, result, adapter)
+    out.audits.append(audited)
+    out.report.add(
+        series_from_audit(
+            audited,
+            source=adapter.name,
+            asset_class=str(target.asset_class),
+            range_start=target.start,
+            range_end=target.end,
+            spec_text=target.describe(),
+            retries=outcome.retries,
+            elapsed_seconds=outcome.elapsed_seconds,
+            attempts=outcome.attempts,
+            as_of=target.as_of,
+            missing_archives=_archives_named(adapter, target, result.missing),
+            pending_upstream=pending,
+        )
     )
 
 
@@ -142,9 +263,13 @@ def run_daily(
 ) -> RunOutput:
     """跑一轮摄取 + 核查 + 报告。**不出网**：字节全经注入的 `fetch`。
 
-    `since_last=True` 时每条序列的区间先按已提交的 `ingestion_batch` 收窄；收窄成空的序列
-    不写 batch（ADR-0002 不写空批次），但**照样在运行记录里留一行** `skipped_empty_increment`
-    ——否则「今天没有新数据」与「今天 timer 没跑」事后分不开。
+    `since_last=True` 时每条序列的区间按已提交的 `ingestion_batch` 推算：有水位线就从
+    水位线次日起（`--start` 只是无水位线时的初始起点，被忽略时写进运行记录的 `notes`）。
+    推算成空的序列不写 batch（ADR-0002 不写空批次），但**照样在运行记录里留一行**
+    `skipped_empty_increment`——否则「今天没有新数据」与「今天 timer 没跑」事后分不开。
+
+    每条 spec 的请求日（`as_of`）未指定时取本次运行的 UTC 日期：adapter 按它判断哪些归档
+    已经发布（R2）。
     """
     root = Path(root)
     adapter = adapter if adapter is not None else get_adapter()
@@ -162,9 +287,14 @@ def run_daily(
     run_started = monotonic()
 
     for spec in specs:
+        if spec.as_of is None:
+            spec = spec.requested_on(stamp.date())
         target = plan_incremental(root, spec, adapter.name) if since_last else spec
         if since_last:
             out.increments.append(describe_increment(spec, target))
+            note = start_ignored_note(spec, target)
+            if note:
+                log.notes.append(f"{spec.describe()}: {note}")
         if target is None:
             log.record(
                 SeriesOutcome(
@@ -174,10 +304,11 @@ def run_daily(
                 )
             )
             continue
-        result, outcome, failure = _ingest_series(
+        _process_series(
             root,
             target,
             fetch,
+            out=out,
             run_id=run_id,
             adapter=adapter,
             retry=retry,
@@ -186,26 +317,6 @@ def run_daily(
             rerun_of=None,
             verify_checksum=verify_checksum,
             monotonic=monotonic,
-        )
-        log.record(outcome)
-        if failure is not None:
-            report.failures.append(failure)
-            continue
-        assert result is not None
-        out.results.append(result)
-        audited = ingest_mod.audit_result(root, result, adapter)
-        out.audits.append(audited)
-        report.add(
-            series_from_audit(
-                audited,
-                source=adapter.name,
-                asset_class=str(target.asset_class),
-                range_start=target.start,
-                range_end=target.end,
-                spec_text=target.describe(),
-                retries=outcome.retries,
-                elapsed_seconds=outcome.elapsed_seconds,
-            )
         )
 
     report.elapsed_seconds = monotonic() - run_started
@@ -234,8 +345,10 @@ def run_backfill_from_report(
 ) -> RunOutput:
     """按一份核查报告补采缺口，并产出**补采后的**新报告。
 
-    补采写的是 `kind='rerun'` 的新 batch，被补的 batch 原样不动。补完重新核查，新报告里
-    这些序列应当是 `coverage=complete`（除非缺的那几档本来就在上游缺失白名单里）。
+    有原 batch 可接的缺档写 `kind='rerun'` + `rerun_of` 的新 batch；原 batch 当天整条失败
+    （报告里 `batch_id=null`）的写 `kind='ingest'`，清单 JSON 记 `from_report=<报告路径>`。
+    被补的 batch 原样不动。补完重新核查，新报告里这些序列应当是 `coverage=complete`
+    （除非缺的那几档本来就在上游缺失白名单里）。
     """
     root = Path(root)
     adapter = adapter if adapter is not None else get_adapter()
@@ -257,38 +370,20 @@ def run_backfill_from_report(
         out.increments.append(f"跳过（上游确实缺失）: {skip.filename} —— {skip.reason}")
 
     for task in plan.tasks:
-        result, outcome, failure = _ingest_series(
+        _process_series(
             root,
             task.spec,
             fetch,
+            out=out,
             run_id=run_id,
             adapter=adapter,
             retry=retry,
             now=stamp,
-            kind=backfill_mod.BACKFILL_KIND,
+            kind=task.kind,
             rerun_of=task.rerun_of,
             verify_checksum=verify_checksum,
             monotonic=monotonic,
-        )
-        log.record(outcome)
-        if failure is not None:
-            report.failures.append(failure)
-            continue
-        assert result is not None
-        out.results.append(result)
-        audited = ingest_mod.audit_result(root, result, adapter)
-        out.audits.append(audited)
-        report.add(
-            series_from_audit(
-                audited,
-                source=adapter.name,
-                asset_class=str(task.spec.asset_class),
-                range_start=task.spec.start,
-                range_end=task.spec.end,
-                spec_text=task.spec.describe(),
-                retries=outcome.retries,
-                elapsed_seconds=outcome.elapsed_seconds,
-            )
+            from_report=task.from_report,
         )
 
     report.elapsed_seconds = monotonic() - run_started
