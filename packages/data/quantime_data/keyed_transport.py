@@ -18,8 +18,11 @@ Massive 的数据要 API key 才取得到，所以它走不了公共只读出口
    逐段合规。白名单而非黑名单：漏一个新端点只是少取一类数据（fail-closed）。
 3. **凭据闸**：key 只进 `Authorization: Bearer` 请求头，**永不进 URL**。`?apiKey=` 这种
    写法会把凭据写进代理日志、访问日志、`next_url` 回显和异常里的 URL；请求头不会。
-   URL 里出现任何疑似 key 的 query（`apiKey` / `api_key` / `token` / `access_key`）
-   直接拒绝——那多半意味着某处把凭据拼进了字符串。
+   query 先按 `parse_qsl` **解码**（百分号、`+`，再多解一层防双重编码）再判键名，
+   解码后的键（去掉 `_`/`-`，大小写不敏感）命中凭据形态（`apikey` / `token` /
+   `accesstoken` / `authorization` / `key` …）就拒绝；带 fragment 的 URL 直接拒。
+   **凭据检查之前**任何错误信息都不回显完整 URL，只给 `transport.redact_url` 的形态
+   （`scheme://host/path` 或 sha256 前 12 位）——那时 URL 里可能正拼着 key。
 
 限流：免费 / Basic 档对未订阅资产类限 5 请求/分钟，超限 HTTP 429（官方知识库）。
 本出口默认按 `massive.FREE_TIER_MIN_INTERVAL`（12 秒）节流，退避与重试**复用**
@@ -34,11 +37,12 @@ Massive 的数据要 API key 才取得到，所以它走不了公共只读出口
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, unquote_plus, urlsplit
 
 from quantime_core.allowlist import (
     HostEntry,
@@ -47,7 +51,17 @@ from quantime_core.allowlist import (
 )
 
 from .sources import massive
-from .transport import Response, Throttled, TransportBoundaryError, canonical_path
+from .transport import (
+    Response,
+    Throttled,
+    TransportBoundaryError,
+    canonical_path,
+    path_digest,
+    redact_url,
+)
+
+#: 本出口的日志只记 `redact_url` 形态的 URL 与状态，从不记请求头、query 或 key。
+log = logging.getLogger(__name__)
 
 #: 环境变量名。值由 `op run` 注入；仓库里只有 `*.tpl` 允许出现 `op://` 引用。
 API_KEY_ENV = "MASSIVE_API_KEY"
@@ -82,7 +96,23 @@ KEYED_READONLY_ALL: tuple[str, ...] = (
 )
 
 #: query 里一旦出现这些键，说明有人把凭据拼进了 URL。key 只走请求头。
-_CREDENTIAL_QUERY_KEYS: tuple[str, ...] = ("apikey", "api_key", "token", "access_key", "key")
+#: 比较口径：**解码后**的键，小写，去掉 `_` 与 `-`（所以 `api_key` / `API-KEY` / `apiKey`
+#: 都归一成 `apikey`）。
+_CREDENTIAL_QUERY_KEYS: frozenset[str] = frozenset(
+    {
+        "apikey",
+        "key",
+        "token",
+        "accesstoken",
+        "accesskey",
+        "authorization",
+        "auth",
+        "bearer",
+        "secret",
+        "password",
+        "credential",
+    }
+)
 
 
 class CredentialUnavailableError(RuntimeError):
@@ -100,8 +130,13 @@ class KeyedRequest:
     url: str
     headers: dict[str, str]
 
-    def __repr__(self) -> str:  # pragma: no cover - 仅用于避免误打印
-        return f"KeyedRequest(url={self.url!r}, headers=<redacted {len(self.headers)} 项>)"
+    def __repr__(self) -> str:
+        # 只回显 `scheme://host/path`：query 虽已过凭据闸，也没有理由进日志。
+        return (
+            f"KeyedRequest(url={redact_url(self.url)!r}, headers=<redacted {len(self.headers)} 项>)"
+        )
+
+    __str__ = __repr__
 
 
 #: opener 契约：`(url, headers) -> Response`。默认实现在 `cli.py`（那里才 import httpx）。
@@ -129,31 +164,45 @@ def read_api_key(env: dict[str, str] | None = None) -> str:
     return key
 
 
+def _normalise_query_key(raw: str) -> str:
+    """凭据键的比较口径：解码两层（防双重编码），小写，去掉 `_` `-` 与空白。"""
+    key = unquote_plus(unquote_plus(raw))
+    return re.sub(r"[\s_-]", "", key).lower()
+
+
 def split_keyed_url(url: str) -> tuple[str, str]:
     """拆出 `(host, path)` 并做闸之前的形态校验。
 
-    只接受 https（凭据绝不走明文）；带 `user:pass@` 的 URL 直接拒绝；query 里出现
-    疑似凭据的键直接拒绝——key 只走请求头。
+    只接受 https（凭据绝不走明文）；带 `user:pass@` 或 fragment 的 URL 直接拒绝；query
+    **解码后**出现疑似凭据的键直接拒绝——key 只走请求头。
+
+    本函数跑在凭据检查**之前**，所以它的每一条错误信息都只用 `redact_url(url)`，
+    绝不回显原始 URL。
     """
-    parts = urlsplit(url)
+    shown = redact_url(url)
+    try:
+        parts = urlsplit(url)
+        hostname = parts.hostname
+    except ValueError:
+        raise TransportBoundaryError(f"URL 无法解析，拒绝发出请求: {shown}") from None
     if parts.scheme != "https":
-        raise TransportBoundaryError(f"带凭据的出口只允许 https: {url!r}")
+        raise TransportBoundaryError(f"带凭据的出口只允许 https: {shown}")
     if parts.username or parts.password:
         raise TransportBoundaryError("URL 不得携带凭据（key 只走 Authorization 头）")
-    if not parts.hostname:
-        raise TransportBoundaryError(f"URL 无 host: {url!r}")
-    if parts.fragment:
-        raise TransportBoundaryError(f"不接受带 fragment 的 URL: {url!r}")
-    if ".." in parts.query or any(ord(c) < 0x20 for c in parts.query):
-        raise TransportBoundaryError(f"query 含点段或控制字符，拒绝发出请求: {url!r}")
-    lowered = parts.query.lower()
-    for bad in _CREDENTIAL_QUERY_KEYS:
-        if re.search(rf"(^|&){re.escape(bad)}=", lowered):
+    if not hostname:
+        raise TransportBoundaryError(f"URL 无 host: {shown}")
+    if parts.fragment or "#" in url:
+        raise TransportBoundaryError(f"不接受带 fragment 的 URL（只读数据端点不需要）: {shown}")
+    if ".." in parts.query or any(ord(c) < 0x20 or ord(c) == 0x7F for c in parts.query):
+        raise TransportBoundaryError(f"query 含点段或控制字符，拒绝发出请求: {shown}")
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    for raw_key, _ in pairs:
+        if _normalise_query_key(raw_key) in _CREDENTIAL_QUERY_KEYS:
             raise TransportBoundaryError(
-                f"query 里出现疑似凭据的键 {bad!r}——API key 只走 Authorization 头，"
-                f"绝不进 URL（URL 会落进代理/访问日志）"
+                f"query 里出现疑似凭据的参数——API key 只走 Authorization 头，"
+                f"绝不进 URL（URL 会落进代理/访问日志）: {shown}"
             )
-    return parts.hostname, parts.path
+    return hostname, parts.path
 
 
 def assert_keyed_readonly_path(path: str) -> str:
@@ -165,7 +214,7 @@ def assert_keyed_readonly_path(path: str) -> str:
         if pattern.fullmatch(path):
             return path
     raise TransportBoundaryError(
-        f"路径不在需 key 的只读白名单内，拒绝发出请求: {path!r}"
+        f"路径不在需 key 的只读白名单内，拒绝发出请求: {path_digest(path)}"
         f"（新增端点须先进 KEYED_READONLY_PATHS/PATTERNS，且必须是只读数据端点；"
         f"任何账户/交易/订单端点一律不得加入）"
     )
@@ -203,6 +252,12 @@ class KeyedTransport(Throttled):
         self._opener = opener
         self._api_key = api_key
 
+    def __repr__(self) -> str:
+        # 不回显 key、opener 或任何请求内容。
+        return f"KeyedTransport(min_interval={self._min_interval!r}, api_key=<redacted>)"
+
+    __str__ = __repr__
+
     def build_request(self, url: str) -> KeyedRequest:
         """过闸并组装请求。**公开**是为了让 CLI 在真正发出之前再验一次规范化后的 URL。"""
         assert_keyed_readonly_url(url)
@@ -215,4 +270,7 @@ class KeyedTransport(Throttled):
         重试用尽抛 `RateLimitedError`，404 抛 `FileNotFoundError`——绝不静默返回空。
         """
         request = self.build_request(url)
-        return self._request(url, lambda: self._opener(request.url, dict(request.headers)))
+        log.debug("keyed GET %s", redact_url(request.url))
+        body = self._request(url, lambda: self._opener(request.url, dict(request.headers)))
+        log.debug("keyed GET %s -> %d 字节", redact_url(request.url), len(body))
+        return body

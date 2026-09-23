@@ -26,7 +26,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -112,6 +114,35 @@ class Response:
 Opener = Callable[[str], Response]
 
 
+#: 可以原样回显的路径/host 字符集。超出它的（百分号、空白、控制字符……）一律只给哈希。
+_SAFE_ECHO_RE = re.compile(r"[A-Za-z0-9/._:-]*\Z")
+
+
+def path_digest(path: str) -> str:
+    """被拒路径只回显 sha256 前 12 位：不在白名单的路径不可信，可能夹带 key。"""
+    return f"<path sha256:{hashlib.sha256(path.encode()).hexdigest()[:12]}>"
+
+
+def redact_url(url: str) -> str:
+    """把 URL 变成**可以进异常/日志的形态**：只留 `scheme://host/path`，丢掉 query 与 fragment。
+
+    需凭据的出口在凭据检查**之前**就可能要报错（scheme 不对、host 不在表内……），而那时
+    URL 里可能正拼着 key（QNT-47 返修 #1，verify-b P1）。所以错误信息一律经过这里：
+    query/fragment 整段丢弃；host 或 path 里出现安全字符集以外的字符时，连它们也不回显，
+    只给 sha256 前 12 位——足够在日志里对上是哪一次请求，又不泄漏任何原文。
+    """
+    try:
+        parts = urlsplit(url)
+        scheme, host, path = parts.scheme, parts.hostname or "", parts.path
+    except ValueError:
+        return f"<unparseable url sha256:{hashlib.sha256(url.encode()).hexdigest()[:12]}>"
+    if not (_SAFE_ECHO_RE.match(scheme) and _SAFE_ECHO_RE.match(host)):
+        return f"<url sha256:{hashlib.sha256(url.encode()).hexdigest()[:12]}>"
+    if not _SAFE_ECHO_RE.match(path):
+        path = f"/<path sha256:{hashlib.sha256(path.encode()).hexdigest()[:12]}>"
+    return f"{scheme}://{host}{path}"
+
+
 def split_public_url(url: str) -> tuple[str, str]:
     """拆出 `(host, path)` 并做两道闸之前的形态校验。
 
@@ -146,19 +177,20 @@ def canonical_path(path: str) -> str:
     逐字节相同，中间不存在可被利用的规范化差异。
     """
     if not path.startswith("/"):
-        raise TransportBoundaryError(f"路径必须以 / 开头: {path!r}")
+        raise TransportBoundaryError(f"路径必须以 / 开头: {path_digest(path)}")
     for ch in _FORBIDDEN_PATH_CHARS:
         if ch in path:
             raise TransportBoundaryError(
-                f"路径含歧义字符 {ch!r}，拒绝发出请求（百分号编码/反斜杠/空白一律不接受）: {path!r}"
+                f"路径含歧义字符 {ch!r}，拒绝发出请求（百分号编码/反斜杠/空白一律不接受）: "
+                f"{path_digest(path)}"
             )
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in path):
-        raise TransportBoundaryError(f"路径含控制字符，拒绝发出请求: {path!r}")
+        raise TransportBoundaryError(f"路径含控制字符，拒绝发出请求: {path_digest(path)}")
     segments = path.split("/")[1:]
     for seg in segments:
         if seg in ("", ".", ".."):
             raise TransportBoundaryError(
-                f"路径含空段或点段（`//`、`.`、`..`），拒绝发出请求: {path!r}"
+                f"路径含空段或点段（`//`、`.`、`..`），拒绝发出请求: {path_digest(path)}"
             )
     return path
 
@@ -256,15 +288,16 @@ class Throttled:
             if response.status == 200:
                 return response.content
             if response.status == 404:
-                raise FileNotFoundError(f"上游无此资源（404）: {url}")
+                raise FileNotFoundError(f"上游无此资源（404）: {redact_url(url)}")
             last_status = response.status
             if response.status not in RETRYABLE_STATUS:
-                raise RateLimitedError(f"上游返回 HTTP {response.status}: {url}")
+                raise RateLimitedError(f"上游返回 HTTP {response.status}: {redact_url(url)}")
             if attempt == len(self._backoff):
                 break
             self._nap(self._backoff_seconds(attempt, response.retry_after))
         raise RateLimitedError(
-            f"退避重试 {len(self._backoff)} 次后仍为 HTTP {last_status}（最后一次）: {url}"
+            f"退避重试 {len(self._backoff)} 次后仍为 HTTP {last_status}（最后一次）: "
+            f"{redact_url(url)}"
         )
 
 

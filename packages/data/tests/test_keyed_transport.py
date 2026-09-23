@@ -426,3 +426,134 @@ def test_split_keyed_url_returns_host_and_path():
         HOST,
         "/stocks/v1/splits",
     )
+
+
+# ---- 返修 #1（verify-b P1 ×2）：解码后判键 + 凭据检查前不回显 URL ----
+
+import logging  # noqa: E402
+import secrets  # noqa: E402
+
+from quantime_data.transport import redact_url  # noqa: E402
+
+
+def _fake_key() -> str:
+    return f"FAKEKEY_{secrets.token_hex(8)}"
+
+
+def _assert_rejected_before_opener(url: str) -> TransportBoundaryError:
+    """断言被闸拒绝，且 opener 零调用——请求根本没发出。"""
+    transport, opener = make_transport(Response(200, b"should-not-be-fetched"))
+    with pytest.raises(TransportBoundaryError) as info:
+        transport.get(url)
+    assert opener.calls == [], f"被拒的 URL 仍到了 opener: {opener.calls!r}"
+    return info.value
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "api%4Bey={k}",  # verify-b 复现：%4B = K
+        "%61piKey={k}",  # %61 = a
+        "APIKEY={k}",
+        "api_key={k}",
+        "API-KEY={k}",
+        "api%254Bey={k}",  # 双重编码：%25 = %，解一层得 api%4Bey
+        "api+key={k}",  # `+` 解码为空格
+        "ticker=AAPL&access_token={k}",
+        "Authorization=Bearer%20{k}",
+        "token={k}",
+        "key={k}",
+        "apiKey=",  # 空值也拒：键本身就说明有人在往 URL 里拼凭据
+    ],
+)
+def test_credential_shaped_query_keys_are_rejected_after_decoding(query):
+    key = _fake_key()
+    url = f"https://{HOST}/stocks/v1/splits?{query.format(k=key)}"
+    exc = _assert_rejected_before_opener(url)
+    assert key not in str(exc)
+
+
+def test_a_fragment_is_rejected_even_when_it_is_the_only_carrier_of_the_key():
+    key = _fake_key()
+    exc = _assert_rejected_before_opener(f"https://{HOST}/stocks/v1/splits#apiKey={key}")
+    assert "fragment" in str(exc)
+    assert key not in str(exc)
+
+
+def test_an_empty_fragment_is_rejected_too():
+    _assert_rejected_before_opener(f"https://{HOST}/stocks/v1/splits?ticker=AAPL#")
+
+
+def test_rejections_before_the_credential_check_never_echo_the_key(caplog):
+    """凭据检查之前的每一种拒绝（scheme / host / fragment / 路径 / 凭据键）都不得回显 key。"""
+    key = _fake_key()
+    caplog.set_level(logging.DEBUG)
+    transport, opener = make_transport(Response(200, b""))
+    urls = [
+        f"https://{HOST}/stocks/v1/splits?apiKey={key}#frag",  # 卡里点名的那条
+        f"http://{HOST}/stocks/v1/splits?apiKey={key}",
+        f"https://evil.test/stocks/v1/splits?apiKey={key}",
+        f"https://{HOST}/v2/orders?apiKey={key}",
+        f"https://{HOST}/stocks/v1/splits?x=1&api%4Bey={key}",
+        f"https://{HOST}/stocks/v1/{key}",  # key 甚至拼进了路径
+        f"https://{HOST}/stocks/v1/splits?q=..{key}",
+    ]
+    for url in urls:
+        with pytest.raises(TransportBoundaryError) as info:
+            transport.get(url)
+        for text in (str(info.value), repr(info.value)):
+            assert key not in text, f"异常回显了 key: {text}"
+    assert opener.calls == []
+    assert key not in repr(transport) and key not in str(transport)
+    assert FAKE_KEY not in repr(transport)
+    for record in caplog.records:
+        assert key not in record.getMessage()
+        assert FAKE_KEY not in record.getMessage()
+
+
+def test_the_success_path_logs_no_bearer_value_and_no_query(caplog):
+    caplog.set_level(logging.DEBUG, logger="quantime_data.keyed_transport")
+    transport, opener = make_transport(Response(200, b"body"))
+    url = f"{GOOD_URL}&limit=5000"
+    assert transport.get(url) == b"body"
+    assert opener.calls, "成功路径没到 opener"
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages, "成功路径没有 debug 日志——本条断言成了空集通过"
+    for message in messages:
+        assert FAKE_KEY not in message
+        assert "Bearer" not in message
+        assert "?" not in message and "adjusted=" not in message
+
+
+def test_keyed_request_repr_hides_query_and_bearer():
+    key = _fake_key()
+    request = KeyedRequest(url=f"{GOOD_URL}&cursor=abc", headers={"Authorization": f"Bearer {key}"})
+    for text in (repr(request), str(request)):
+        assert key not in text and "Bearer" not in text
+        assert "?" not in text and "cursor" not in text
+
+
+def test_http_errors_after_the_gate_do_not_echo_the_query():
+    transport, _ = make_transport(Response(401, b""))
+    with pytest.raises(RateLimitedError) as info:
+        transport.get(f"{GOOD_URL}&cursor=opaque-token-ish")
+    assert "cursor" not in str(info.value) and "?" not in str(info.value)
+
+
+def test_redact_url_keeps_only_scheme_host_path():
+    assert (
+        redact_url(f"https://{HOST}/stocks/v1/splits?apiKey=x#y")
+        == f"https://{HOST}/stocks/v1/splits"
+    )
+
+
+def test_redact_url_hashes_paths_outside_the_safe_charset():
+    shown = redact_url(f"https://{HOST}/stocks/%41piKey%3Dsecret")
+    assert "secret" not in shown and "sha256:" in shown
+
+
+def test_a_lookalike_key_that_is_not_a_credential_still_passes():
+    """解码后判键不应误伤正常参数：`ticker` / `cursor` / `sort` 都含子串但不是凭据键。"""
+    assert_keyed_readonly_url(
+        f"https://{HOST}/stocks/v1/splits?ticker=AAPL&cursor=abc&sort=execution_date.asc"
+    )
