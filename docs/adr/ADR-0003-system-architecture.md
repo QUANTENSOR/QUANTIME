@@ -11,7 +11,7 @@ research:
   - docs/research/other-markets-survey.md（QNT-26，PR #4，verify-b 审中）
 task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 ai_task_describe @ 9976805）
 revised: 2026-09-20（verify-a 第一轮：§5 基准协议、§4.1 单源不变量、§4.2 重放硬验收、allowlist 分层位置；第二轮：R1/R3/R4 校验边界、payload/content hash 分离、逐请求 fail-closed、§3.3 改为待批准提案）
-amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QNT-42 编者说明，承接 QNT-27/QNT-28 文档矛盾）
+amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QNT-42 编者说明，承接 QNT-27/QNT-28 文档矛盾）；2026-09-23（QNT-49 编者说明，承接 owner 2026-09-23 框架裁决与模型升级裁决）
 ---
 
 # ADR-0003 系统架构（PROPOSED）
@@ -41,6 +41,8 @@ amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QN
 
 不选的（记录以免重议）：pandas 作为**内部计算**基线（保留为 I/O 与展示适配，因子/回测热路径不用 pandas 对象）；SQLite/Postgres 作业务库（第一阶段无多写者，DuckDB 视图层 + Parquet 满足 ADR-0002；Postgres 估算 1.4–2.1 TB 见 ADR-0002 修订）；Vue（前端参考项目 frequi 是 Vue，已排除）。
 
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——研究环境 `research/qlib/` 为独立 uv 项目，Python `==3.12.*`，依赖 pyqlib / vectorbt / alphalens-reloaded；不是 workspace member；主包 `>=3.14` 不变。上段「pandas 不作内部计算基线」仅约束 `packages/*`，不约束 `research/`。本条不改 Decision。
+
 ## 3. Decision — 模块分层与目录骨架
 
 ### 3.1 一级模块 → package 映射
@@ -60,6 +62,8 @@ amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QN
 - 新增 `api`：QNT-4 未含前后端；行情看板/研报资料共用一个后端进程。
 - `monitor` → 并入 `risk`（第一阶段监控对象只有 paper 账户风险与摄取健康度，不值一个包）；若第二阶段需要独立 alerting 再拆。
 - 其余同名包语义不变。
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——§3.1 / §3.2 的 `packages/factors` / `backtest` / `portfolio` 本阶段不建；因子与回测能力位于 `research/`。`research/` 只读 `data/`，主包不得 import `research/`。本节 package 映射与目录骨架原文保留，不改 Decision。
 
 ### 3.2 目录骨架（**只写在文档里，不预建空目录**；每个目录在对应实现卡里随首个真实文件创建）
 
@@ -130,6 +134,8 @@ data/
 - 只 insert 的落地方式：**新 batch = 新目录**；重跑同一区间写新 `batch_id`，`source_version` 不变、附 `rerun_of=<batch_id>`；"当前视图"由 DuckDB 视图 `latest_per_source` 按 `(natural key, source)` 取最大 `batch_id`。
 - 上游归档（Vision zip）**可被替换**（QNT-24 verify-b 指正）：重放只依赖本地 `raw/` 副本与 `ingestion_batch.content_sha256`，永不把上游 URL 当作快照。
 
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——派生缓存语义：Qlib bin 是从已提交 Parquet 派生的缓存，可随时删除重建、不入库、不作为任何结论的数据来源依据；转换脚本记录源 batch 清单 + sha（MANIFEST）保证可追溯。Parquet 仍唯一真相源，DuckDB 为通用查询层（本节原文不变）。因子值只留 `data/research/`，晋升进 lake 另开步骤。本条不改存储决策。
+
 ### 4.2 DuckDB 的角色
 
 - 单文件 `data/quantime.duckdb` 只存**视图定义与宏**（可从仓库内 SQL 重建，`packages/data/views.py` 幂等注册）；不存业务行。丢掉该文件不丢数据。
@@ -165,6 +171,9 @@ data/
 
 - 热路径（因子计算、回测撮合、绩效统计）只允许 DuckDB SQL、numpy 数组、可选 polars；禁止 Python 行级循环与 pandas `apply`。
 - 因子用**字符串表达式 DSL**（借鉴 qlib `ops.py` 的 Rolling 算子族语义，QNT-25 §4.1；qlib 本身装不上 3.14，不作依赖），解析为 DuckDB 窗口函数或 numpy 算子；表达式字符串即因子定义，随结果一起存储（可解释、可 diff、可重放）。
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——因子表达式改用 Qlib 表达式，在 3.12 研究环境运行；「表达式字符串随结果存」的可解释性要求不变。本条不改 Decision。
+
 - 指标预热期（unstable period）必须显式截断（QNT-25 §4.3）；推理期/训练期处理分离防前视泄漏（QNT-25 §4.1 ②）。
 ### 5.1 基准协议（固定输入 + 固定测量；写进 QNT-27/28/29/30/31 验收）
 
@@ -176,6 +185,9 @@ data/
 
 > 编者说明（QNT-42，2026-09-23）：§5.1 未规定基准输入的跨机器复现边界。已由 QNT-40（PR #13，`0fdf657`）承接：复现边界为**任意机器**（任意 x86-64 GitHub runner 与本地 LXC）逐位相等，而非仅同机两次；现行实现通过 `quantime_core.detmath.exp` 避开 CPU 分派达成；`payload_sha256` 比较为精确相等、未放宽。已证实的漂移源只有 close 路径的 `np.exp`（生成第 7 步）；`rng.lognormal`（volume）替换属防御措施，不是第二个已复现漂移源。CI `bench-repro` 矩阵是本轮证据来源（日志覆盖含原生 AVX-512 的 4 种 CPU），hosted runner 标签不保证未来每轮硬件覆盖。
 - 固定 20 因子（表达式 DSL，QNT-29 按此清单实现，不许替换）：`ret_1, ret_5, ret_20, ma_5/close-1, ma_20/close-1, ma_60/close-1, std_20(ret_1), std_60(ret_1), max_20(high)/close-1, min_20(low)/close-1, rsi_14, ts_rank_20(close), corr_20(close, volume), skew_20(ret_1), kurt_20(ret_1), vol_ratio_5_20, amihud_20, macd_12_26_9, bb_pos_20_2, mom_reversal_20_5`（定义写在 `fixtures/bench/factors.yaml`，随 ADR 修订）。
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决（②A）——本条固定 20 因子清单归属卡范围已变（QNT-29 2026-09-23 改写），**暂不适用**；保留原文，不改 Decision。
+
 - 固定策略与成本（QNT-30）：每日 `ts_rank_20(close)` 截面 top 10% 等权多头，日频再平衡，全仓；手续费 `10 bp` 单边、滑点 `5 bp` 固定比例、资金费率 `0`（现货基准；perp 黄金用例另计，crypto-boundaries ③）；初始资金 `1e6`。
 - 摄取基准输入：合成 Vision 风格 zip（同 seed，`300 币对 × 1 个月日 K`，CSV 列序与 Vision 一致），由 `bench_gen.py --mode vision-zip` 生成，不走网络。
 - API 基准：单标的 1,260 日 K（1,260 行）`GET /market/klines?symbol=...&freq=1d`，**1 个并发**，预热 20 次后测 200 次，取 p95；`uvicorn` 单 worker。
@@ -197,6 +209,8 @@ data/
 | 回测对拍 vs vectorbt | 逐日相对误差 **< 1e-9** | QNT-30 |
 | 摄取：300 币对 × 1 月合成 Vision zip，解压+归一化+落盘（含 sha） | **< 60 s** | QNT-28 |
 | API：单标的 1,260 日 K，1 并发 p95 | **< 200 ms** | QNT-31 |
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决（②A）——上表 QNT-29 两行（因子全量 < 30 s、因子增量一日 < 2 s）与 QNT-30 两行（回测 < 10 s、对拍 vs vectorbt < 1e-9）归属卡范围已变（QNT-29/30 2026-09-23 改写），**暂不适用**；保留原文，不改 Decision。
 
 **阈值修订规则**：实现卡不得自行放宽。若实测中位数超阈值，实现卡在四段式"偏离项"里贴 `bench_report.json` 与 profile（DuckDB `EXPLAIN ANALYZE` 或 `py-spy` 火焰图文字摘要），由 planner 提 ADR-0003 修订 PR，**owner 批准**后阈值才生效；单次修订上限 ±50%，累计放宽超过 2× 原值必须重议实现方案而非改数字。收紧阈值同样走修订，但不需 owner 批准（planner 可提，verify 复核）。
 
@@ -232,6 +246,9 @@ data/
 4. **ADR-0002 未决项第 2 条（batch 乱序提交）**：本 ADR §4.2 用"manifest 记录精确文件清单 + sha，重放强制校验（R1–R5）"代替 `batch_id ≤ N` 水位，属于对 D2.7 的**收紧实现**而非修改决策；是否将此写回 ADR-0002 修订（同时把 D2.4 的 `max(ingested_at)` 措辞改为 manifest 文件清单），待 owner 裁决。
 5. **Binance 主 host 451**：任务描述以 Binance 为示例，但美国节点 `api.binance.com`/`fapi.binance.com` 不可达（QNT-5/QNT-24）；第一版数据源改用 `data.binance.vision` 归档 + `data-api.binance.vision` 镜像（现货）。**U 本位永续 REST 无无 key 镜像**，永续数据第一版只有 Vision 归档（funding/metrics 月文件，延迟 T+1）→ 行情看板的"实时"永续行情第一阶段不可达，待 owner 决定是否接受 T+1 或另选源。
 6. **vectorbt 许可**：Apache-2.0 + Commons Clause（QNT-25 §7.2）；作为**对拍参照的开发依赖**（不随产品分发）内部研究可用；若 quantime 未来商业化需 owner 裁决是否换 bt（MIT）为首选。
+
+> 编者说明（QNT-49，2026-09-23）：owner 2026-09-23 裁决——本项目为个人研究、不分发，GPL/AGPL/Commons Clause 均可使用；QNT-25 §7 排除口径不再作为后续卡约束；商业化再议。本条不改 Decision。
+
 7. **研报资料模块**：任务描述隐含抓取研报全文；owner 4A 限定为"元数据 + 链接 + 用户自有文件索引"（§6 `library` router）。
 8. **公司行为与期权调整数据源**：美股期权 OCC 调整、分红拆股因子的免费公开源许可尚未逐一核到一手原文（QNT-26 §4）；`adjust_factor` schema 已定但美股填充源待 Stage 3 调研卡。
 9. **ADR-0001 未决项**（D1.8 transfer 权限、Bybit demo 公共行情主网 host、D1.9 合规表述）仍未闭合；本 ADR §3.3 的 `public_readonly=True` allowlist 条目是对第 2 条的架构侧回应，法律/政策项不在本文范围。
