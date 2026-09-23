@@ -35,7 +35,7 @@ import json
 import random
 import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -423,27 +423,36 @@ def assert_credentialed_post_url(url: str) -> HostEntry:
     return entry
 
 
-def assert_api_names_within_authority(api_names: frozenset[str]) -> frozenset[str]:
-    """构造闸：调用方给的名单必须是权威枚举的**子集**（QNT-48 返工，verify-b P1）。
+def assert_api_names_within_authority(api_names: Iterable[str]) -> frozenset[str]:
+    """构造闸：把调用方给的名单**复制冻结**，再校验它是权威枚举的子集。
 
-    原实现把 `api_names` 当普通默认参数收下，调用方传 `frozenset({"daily_order"})` 就能
-    把交易近似名装进白名单——「默认安全、可选放宽」等于没有闸门，因为放宽不需要任何审批。
-    权威枚举是 `TUSHARE_READONLY_API_NAMES`，它在本模块里，改它要过 CI 静态守卫；
-    调用方只能**收窄**（源侧只用自己需要的那几个端点仍然有价值），一个字都不能加。
+    两轮 verify-b 打回的是同一处闸门的两个漏法，都值得记下来：
+
+    1. 最初 `api_names` 只是个普通默认参数，原样保存——调用方传
+       `frozenset({"daily_order"})` 就能把交易近似名装进白名单。「默认安全、可选放宽」
+       等于没有闸门，因为放宽不需要任何审批。
+    2. 加了子集校验后仍然漏：校验完**原样返回调用方的对象**。传个可变 `set`，构造后
+       再 `.add("daily_order")`，闸门就跟着变了——校验只证明了「那一瞬间」是合法的。
+
+    所以这里**先 `frozenset(...)` 复制**再校验，返回的是我们自己的对象，调用方手上那个
+    怎么改都与本出口无关。不靠「拒绝可变类型」来解决：那还是类型判断，`frozenset` 子类
+    或自定义容器照样能绕过去（`__contains__` 可以每次返回不同结果）。复制冻结是无条件的，
+    不依赖传进来的是什么。
 
     在构造点抛而不是 `post` 时抛：一个白名单被悄悄放宽的进程，不该先跑起来再等某次
     请求撞上闸门——那时是否撞上取决于调用顺序，测不出来。
     """
-    extra = api_names - TUSHARE_READONLY_API_NAMES
+    frozen = frozenset(api_names)
+    extra = frozen - TUSHARE_READONLY_API_NAMES
     if extra:
         raise TransportBoundaryError(
             f"api_names 超出权威只读枚举，拒绝构造: {sorted(extra)}"
             f"（权威枚举: {sorted(TUSHARE_READONLY_API_NAMES)}；"
             "调用方只能取子集，新增端点须改 transport 里的权威枚举并确认不是账户/资金/交易类）"
         )
-    if not api_names:
+    if not frozen:
         raise TransportBoundaryError("api_names 为空：这个出口不能发出任何请求，应是配置错误")
-    return api_names
+    return frozen
 
 
 def assert_readonly_api_name(api_name: str, allowed: frozenset[str]) -> str:
@@ -480,8 +489,8 @@ class CredentialedTransport:
         monotonic: Callable[[], float] = time.monotonic,
         jitter: Callable[[], float] = random.random,
         min_interval: float = TUSHARE_MIN_REQUEST_INTERVAL,
-        backoff: tuple[float, ...] = BACKOFF_SCHEDULE,
-        api_names: frozenset[str] = TUSHARE_READONLY_API_NAMES,
+        backoff: Sequence[float] = BACKOFF_SCHEDULE,
+        api_names: Iterable[str] = TUSHARE_READONLY_API_NAMES,
     ) -> None:
         if not isinstance(token, SecretValue):
             raise TypeError("token 必须是 SecretValue（明文 str 会绕过掩码与 redact）")
@@ -491,11 +500,18 @@ class CredentialedTransport:
         self._monotonic = monotonic
         self._jitter = jitter
         self._min_interval = min_interval
-        self._backoff = backoff
+        # 同样复制冻结：调用方传 list 的话，构造后 `.clear()` 就能把退避表抽掉。
+        # 不是安全边界（最坏是打满重试），但别名问题的成因与 api_names 完全一样。
+        self._backoff = tuple(backoff)
         self._api_names = assert_api_names_within_authority(api_names)
         self._last_request_at: float | None = None
         #: 供测试与运维核对：实际睡过的秒数序列。
         self.sleeps: list[float] = []
+
+    @property
+    def api_names(self) -> frozenset[str]:
+        """本出口实际认的端点集合——**我们自己的** frozenset，不是调用方传进来的那个。"""
+        return self._api_names
 
     def _pace(self) -> None:
         if self._last_request_at is None:

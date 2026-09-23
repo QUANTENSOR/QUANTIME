@@ -430,3 +430,75 @@ def test_default_api_names_is_the_authoritative_enum_itself():
 
     sig = inspect.signature(CredentialedTransport.__init__)
     assert sig.parameters["api_names"].default is TUSHARE_READONLY_API_NAMES
+
+
+# ---- 别名闸：构造时复制冻结，调用方改不动我们的名单（QNT-48 第二轮返工 / verify-b）----
+
+
+def test_mutating_the_callers_set_after_construction_does_not_widen_the_gate():
+    """verify-b 第二次复现的路径：校验通过的是「那一瞬间」的集合，不是我们保存的东西。
+
+    传可变 `set`，构造后再 `.add("daily_order")`——如果保存的是调用方的引用，闸门跟着变。
+    """
+    names = {"daily"}
+    transport, opener = make_transport(Response(200, ok_body()), api_names=names)
+
+    names.add("daily_order")  # 构造之后再放宽
+
+    with pytest.raises(TransportBoundaryError, match="不在只读白名单内"):
+        transport.post(URL, api_name="daily_order")
+    assert opener.calls == [], "被拒的请求不该发出去，更不该带上 token"
+
+    # 原本合法的那个端点仍然能走——冻结的是快照，不是把出口一起锁死。
+    transport.post(URL, api_name="daily", fields=("ts_code",))
+    assert len(opener.calls) == 1
+
+
+def test_transport_holds_its_own_frozenset_not_the_callers_object():
+    """保存的必须是我们复制出来的 frozenset，不是传进来那个对象。"""
+    names = {"daily", "trade_cal"}
+    transport, _ = make_transport(Response(200, ok_body()), api_names=names)
+
+    assert transport.api_names is not names
+    assert isinstance(transport.api_names, frozenset)
+    assert transport.api_names == frozenset({"daily", "trade_cal"})
+
+    names.clear()
+    assert transport.api_names == frozenset({"daily", "trade_cal"}), "清空调用方的集合不该影响出口"
+
+
+def test_default_construction_also_snapshots_the_authoritative_enum():
+    """默认路径同样是复制：`api_names` 不该与模块级常量是同一个对象被就地改掉的风险源。
+
+    `TUSHARE_READONLY_API_NAMES` 本身是 frozenset（改不动），这里确认的是相等性成立，
+    以及默认值没有在复制过程中被意外收窄。
+    """
+    transport, _ = make_transport(Response(200, ok_body()))
+    assert transport.api_names == TUSHARE_READONLY_API_NAMES
+
+
+def test_a_frozenset_subclass_that_lies_cannot_widen_the_gate():
+    """不靠「拒绝可变类型」解决问题——类型判断挡不住会说谎的容器。
+
+    这个子类每次 `__iter__` 都多吐一个交易近似名。复制冻结取的是构造那一刻的内容，
+    之后它再怎么变都与出口无关；如果实现改成保存引用并逐次查询，这条就会红。
+    """
+
+    class Sneaky(frozenset):
+        def __contains__(self, item):  # noqa: D105 - 故意对任何名字都点头
+            return True
+
+    transport, opener = make_transport(Response(200, ok_body()), api_names=Sneaky({"daily"}))
+    assert type(transport.api_names) is frozenset, "必须落成纯 frozenset，不能留子类实例"
+
+    with pytest.raises(TransportBoundaryError, match="不在只读白名单内"):
+        transport.post(URL, api_name="daily_order")
+    assert opener.calls == []
+
+
+def test_backoff_schedule_is_snapshotted_too():
+    """同类别名：调用方传 list 后 `.clear()` 不该把退避表抽掉。"""
+    schedule = [0.5, 1.0]
+    transport, _ = make_transport(Response(200, ok_body()), backoff=schedule)
+    schedule.clear()
+    assert transport._backoff == (0.5, 1.0)
