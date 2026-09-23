@@ -1,0 +1,44 @@
+{
+  "doc_accessed": "2026-09-23",
+  "files": [
+    {
+      "api_name": "adj_factor",
+      "doc_url": "https://tushare.pro/document/2?doc_id=28",
+      "file": "adj_factor.json",
+      "sha256": "4aa5082f56d016425f5ba53690b8cac404f3b95906a41e98c228ec0c609dcacd",
+      "size": 1285
+    },
+    {
+      "api_name": "daily",
+      "doc_url": "https://tushare.pro/document/2?doc_id=27",
+      "file": "daily.json",
+      "sha256": "c9d1a15da0ade840a64923ac9fc5587b8ab8ebc5c86333983fa90c486f1e197d",
+      "size": 3379
+    },
+    {
+      "api_name": "daily_basic",
+      "doc_url": "https://tushare.pro/document/2?doc_id=32",
+      "file": "daily_basic.json",
+      "sha256": "cf8b46a1f9a25059d6e155906b489767abcc06234f0bfcd3e602d25120e965b2",
+      "size": 4795
+    },
+    {
+      "api_name": "stock_basic",
+      "doc_url": "https://tushare.pro/document/2?doc_id=25",
+      "file": "stock_basic.json",
+      "sha256": "aadd8718e6d4c8da05fc5928c2e9751f73374c870d6107a61b3e618e869e50b8",
+      "size": 704
+    },
+    {
+      "api_name": "trade_cal",
+      "doc_url": "https://tushare.pro/document/2?doc_id=26",
+      "file": "trade_cal.json",
+      "sha256": "f2b5e7d228ff7ad14b951956e2e6783650f408a0dbab0173a137f871926481b8",
+      "size": 1844
+    }
+  ],
+  "generator": "fixtures/tushare_pro/synth_gen.py",
+  "note": "按公开文档手写的合成响应，非录制；不含 token、账户信息、请求/响应头。阶段 2 用脱敏真实录制替换/补充后，synthetic 翻为 false。",
+  "protocol_doc_url": "https://tushare.pro/document/1?doc_id=130",
+  "synthetic": true
+}
