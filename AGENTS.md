@@ -6,7 +6,7 @@ quantime 是美股 + 美股期权 + 加密合约、日线为主的量化研究�
 
 ## 2. Map
 
-`docs/research/`（调研，带 provenance 头）· `docs/adr/`（设计决策，唯一权威）· `docs/ops/`（花费与运维记录，见 `docs/ops/README.md`）。代码目录尚未建立；落地时按 QNT-4 骨架提案（`packages/{core,data,backtest,research,execution,risk,monitor}`、`systemd/`）在对应任务卡里建，**不预建空目录**。市场数据是许可受限资产：`data/` 永不入库，`fixtures/` 只放合成数据（`synthetic: true` 头）。
+`docs/research/`（调研，带 provenance 头；付费采购清单 `docs/research/paid-data-sources-procurement.md`）· `docs/adr/`（设计决策，唯一权威）· `docs/ops/`（花费与运维记录，见 `docs/ops/README.md`）。代码目录尚未建立；落地时按 QNT-4 骨架提案（`packages/{core,data,backtest,research,execution,risk,monitor}`、`systemd/`）在对应任务卡里建，**不预建空目录**。市场数据是许可受限资产：`data/` 永不入库，`fixtures/` 只放合成数据（`synthetic: true` 头）。
 
 ## 3. 硬边界
 
