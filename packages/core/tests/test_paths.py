@@ -100,6 +100,9 @@ def test_ingestion_batch_is_the_only_meta_table_without_source_partition():
     assert meta_batch_dir(MetaTable.TRADING_CALENDAR, BATCH, source="binance").as_posix() == (
         f"data/meta/trading_calendar/source=binance/batch={BATCH}"
     )
+    assert meta_batch_dir(MetaTable.TICKER_EVENTS, BATCH, source="massive_rest").as_posix() == (
+        f"data/meta/ticker_events/source=massive_rest/batch={BATCH}"
+    )
 
 
 def test_raw_and_staging_and_run_paths():

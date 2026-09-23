@@ -1,0 +1,50 @@
+# quantime 美股 + 美股期权标的清单（QNT-47 阶段 1）——**版本控制的固定清单**。
+#
+# 与 `universe.yaml`（加密）分文件：两个市场的腿键、freq 口径、期权链参数都不一样，
+# 挤进一个文件只会让两边都读到自己不需要的东西。清单变更走 PR，diff 即是 provenance。
+#
+# 卡范围：首批 ≤20 支标的 + 它们的期权链。这里取 20 支（大盘 + 期权链流动性好的），
+# 都是美国大盘常见成分，便于与公开数据交叉核对。
+#
+# `freqs` 只有 `1d`：本系统是日线级别的（AGENTS.md §1）。
+
+version: 1
+
+# 美股日线 + 公司行动（拆股 / 分红）。
+equity:
+  freqs: ["1d"]
+  symbols:
+    - AAPL
+    - MSFT
+    - NVDA
+    - AMZN
+    - GOOGL
+    - META
+    - TSLA
+    - BRK.B
+    - JPM
+    - V
+    - UNH
+    - XOM
+    - JNJ
+    - WMT
+    - PG
+    - AVGO
+    - HD
+    - MA
+    - COST
+    - SPY
+
+# 美股期权：底层沿用 equity 腿的前若干支（期权链体量大，阶段 1 不铺开——
+# 全量估算见 `sources/massive.py` 模块头，免费档下全链回补不可行）。
+# `symbols` 在这里是**底层** ticker，不是 OCC 合约 ticker：合约由
+# `/v3/reference/options/contracts` 按底层列出，不在清单里硬编码
+# （硬编码合约会在到期后变成一张死清单）。
+option:
+  freqs: ["1d"]
+  symbols:
+    - SPY
+    - AAPL
+    - NVDA
+    - TSLA
+    - MSFT

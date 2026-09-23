@@ -45,6 +45,7 @@ from quantime_core.paths import (
     Market,
     MetaTable,
     assert_batch_kind,
+    assert_scope,
     assert_source,
     meta_batch_dir,
     source_of_batch_dir,
@@ -431,6 +432,134 @@ def commit_batch(
         batch_id=batch_id,
         source=source,
         batch_dir=spec.batch_dir.as_posix(),
+        parts=parts,
+        raw_files=raw_entries,
+        manifest_path=manifest_rel,
+        content_sha256=content_sha256,
+        row_count=table.num_rows,
+        kind=kind,
+        rerun_of=rerun_of,
+        meta_files=(meta_entry,),
+    )
+
+
+def commit_meta_batch(
+    root: str | os.PathLike[str],
+    table: pa.Table,
+    *,
+    meta_table: MetaTable | str,
+    market: Market | str,
+    asset_class: AssetClass | str,
+    scope: str,
+    source: str,
+    source_version: str,
+    run_id: str,
+    batch_id: str | None = None,
+    kind: str = "ingest",
+    rerun_of: str | None = None,
+    raw_files: tuple[Path, ...] = (),
+    range_start: dt.datetime | None = None,
+    range_end: dt.datetime | None = None,
+    columns: tuple[str, ...] | None = None,
+    claim: BatchClaim | None = None,
+) -> CommittedBatch:
+    """把一个 meta 表（`instrument_meta` / `adjust_factor` / `ticker_events` …）提交为新 batch。
+
+    与 `commit_batch` 同一套顺序与不变量（先取锁 → staging → 原子发布 → 清单 → 最后 insert
+    `ingestion_batch` 行），只是落点是 `data/meta/<table>/source=<s>/batch=<id>/`
+    （`paths.meta_batch_dir`）而不是湖路径。QNT-47 阶段 2 新增：此前 meta 表只有路径函数、
+    没有提交入口（PR「文档矛盾」一节已报）。
+
+    `ingestion_batch` 行的 `datatype` 记 meta 表名、`freq` 记 `event`——该表的这两列是
+    自由字符串，湖路径的 `DataType` 枚举里没有「参考数据」这一类，不借用一个语义不符的
+    枚举值冒充。
+    """
+    root = Path(root)
+    table_name = MetaTable(meta_table)
+    if table_name is MetaTable.INGESTION_BATCH:
+        raise BatchWriteError("ingestion_batch 只由提交流程自身 insert，不得经本入口写入")
+    source = assert_source(source)
+    scope = assert_scope(scope)
+    kind = assert_batch_kind(kind)
+    batch_id = assert_valid_id(batch_id, field="batch_id") if batch_id else new_batch_id()
+    if rerun_of is not None:
+        assert_valid_id(rerun_of, field="rerun_of")
+    if kind == "rerun" and rerun_of is None:
+        raise BatchWriteError("kind='rerun' 必须带 rerun_of=<原 batch_id>")
+    assert_valid_id(run_id, field="run_id")
+    try:
+        final_table = parquet_io.canonical_table(table, columns)
+    except KeyError as exc:
+        raise BatchWriteError(f"columns 投影失败: {exc}") from exc
+    _assert_provenance(final_table, source=source, batch_id=batch_id)
+
+    rel_dir = meta_batch_dir(table_name, batch_id, source=source)
+    batch_dir = root / rel_dir
+    _assert_empty_target(batch_dir)
+    raw_entries = tuple(_file_entry(root, Path(p)) for p in raw_files)
+
+    _claim_batch_id(root, batch_id, holder=claim)
+
+    payload = parquet_io.table_to_bytes(final_table)
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    final_part = batch_dir / "part-0000.parquet"
+    content_sha256 = _publish_final_bytes(root, final_part, payload)
+    parts = (
+        FileEntry(
+            path=final_part.relative_to(root).as_posix(),
+            sha256=content_sha256,
+            size=len(payload),
+        ),
+    )
+    manifest_rel = batch_manifest_path(batch_id)
+    manifest_abs = root / manifest_rel
+    manifest_abs.parent.mkdir(parents=True, exist_ok=True)
+    _publish_final_text(
+        root,
+        manifest_abs,
+        json.dumps(
+            {
+                "batch_id": batch_id,
+                "source": source,
+                "batch_dir": rel_dir.as_posix(),
+                "parts": [e.as_dict() for e in parts],
+                "raw": [e.as_dict() for e in raw_entries],
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        + "\n",
+    )
+    now = _now()
+    meta_entry = _insert_ingestion_batch_row(
+        root,
+        {
+            "batch_id": batch_id,
+            "source": source,
+            "source_version": source_version,
+            "market": str(Market(market)),
+            "asset_class": str(AssetClass(asset_class)),
+            "datatype": str(table_name),
+            "freq": str(Freq.EVENT),
+            "scope": scope,
+            "range_start": range_start,
+            "range_end": range_end,
+            "row_count": table.num_rows,
+            "content_sha256": content_sha256,
+            "raw_sha256": raw_entries[0].sha256 if raw_entries else None,
+            "manifest_path": manifest_rel,
+            "committed_at": now,
+            "ingested_at": now,
+            "rerun_of": rerun_of,
+            "run_id": run_id,
+            "kind": kind,
+        },
+    )
+    return CommittedBatch(
+        batch_id=batch_id,
+        source=source,
+        batch_dir=rel_dir.as_posix(),
         parts=parts,
         raw_files=raw_entries,
         manifest_path=manifest_rel,

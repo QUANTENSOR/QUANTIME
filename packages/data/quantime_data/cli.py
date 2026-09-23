@@ -12,6 +12,14 @@
 `plan`    只打印将要请求的 URL（dry-run，不出网）
 `ingest`  按 `universe.yaml` 摄取；`--rerun-of` 走 `kind='rerun'`，
           `--audit` 顺带做缺口/重复核查并把报告也经 publish 路径提交为一个 batch
+
+`quantime-ingest-us`（QNT-47 阶段 2，需 key 的只读源；入口 `main_us`）
+----------------------------------------------------------------------
+`flatfiles --start --end`  Massive Flat Files `day_aggs_v1` → kline 1d（一日一个 batch）
+`reference`                Massive REST ticker 全表 / 拆股 / 分红 / ticker 变更 → meta 表
+
+凭据只经 `op run --env-file=docs/ops/massive*.env.tpl` 注入；取不到即 exit 1，无回退。
+两个 SDK/客户端（`boto3`、`httpx`）同样只在本文件的工厂函数里 import。
 """
 
 from __future__ import annotations
@@ -27,7 +35,16 @@ from quantime_core.ids import new_run_id
 from quantime_core.paths import AssetClass, DataType, Freq
 
 from . import audit as audit_mod
+from . import flatfiles as ff
 from . import ingest as ingest_mod
+from . import massive_ingest as mi
+from .keyed_transport import (
+    CredentialUnavailableError,
+    KeyedTransport,
+    check_keyed_outgoing,
+    read_api_key,
+)
+from .sources import massive
 from .transport import PublicTransport, Response, assert_public_readonly_url
 from .universe import load_universe
 
@@ -247,6 +264,206 @@ def _run_ingest(args) -> int:
         print(f"FAILED {f}", file=sys.stderr)
     print(f"# run_id={run_id} ok={len(results)} failed={len(failures)}", file=sys.stderr)
     return 1 if failures and not results else 0
+
+
+# =========================================================================== quantime-ingest-us
+
+
+def _keyed_http_opener():
+    """需 key 的 REST opener（Massive）。与 `_http_opener` 同样不跟随重定向。
+
+    发出前对 **httpx 规范化后的 URL + 实际要发的请求头** 再过一遍 `check_keyed_outgoing`：
+    URL 两道闸 + `Authorization: Bearer` 必须在——缺头的请求在本机就被拒绝。
+    """
+    import httpx
+
+    client = httpx.Client(
+        timeout=HTTP_TIMEOUT,
+        follow_redirects=False,
+        headers={"User-Agent": USER_AGENT},
+    )
+
+    def opener(url: str, headers: dict[str, str]) -> Response:
+        request = client.build_request("GET", url, headers=headers)
+        sent = {k: v for k, v in request.headers.items() if k.lower() == "authorization"}
+        check_keyed_outgoing(str(request.url), sent)
+        response = client.send(request)
+        retry_after = response.headers.get("Retry-After")
+        return Response(
+            status=response.status_code,
+            content=response.content,
+            retry_after=float(retry_after) if retry_after and retry_after.isdigit() else None,
+        )
+
+    return opener
+
+
+def _flatfiles_client(creds: ff.FlatFilesCredentials):
+    """Massive Flat Files 的 boto3 S3 客户端（path-style、SigV4、us-east-1）并装只读闸。
+
+    SDK 自带重试关掉（`total_max_attempts=1`）：重试只走 `flatfiles.retry_call` 一层，
+    报告里的重试计数才是真实的。
+    """
+    import boto3
+    from botocore.config import Config
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=ff.FLATFILES_ENDPOINT,
+        region_name=ff.FLATFILES_REGION,
+        aws_access_key_id=creds.access_key_id,
+        aws_secret_access_key=creds.secret_access_key,
+        config=Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "path"},
+            retries={"total_max_attempts": 1},
+            connect_timeout=20,
+            read_timeout=HTTP_TIMEOUT,
+        ),
+    )
+    return ff.install_readonly_guard(client)
+
+
+def build_us_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="quantime-ingest-us",
+        description="Massive 美股摄取（需 key、只读；QNT-47 阶段 2）",
+    )
+    parser.add_argument("--root", type=Path, required=True, help="数据根目录（含 data/）")
+    parser.add_argument("--run-id", default=None, help="默认新建一个 ULID")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("flatfiles", help="day_aggs_v1 → kline 1d")
+    p.add_argument("--start", type=_date, required=True, help="起始日 YYYY-MM-DD")
+    p.add_argument("--end", type=_date, required=True, help="结束日 YYYY-MM-DD（含）")
+
+    p = sub.add_parser("reference", help="ticker 全表 / 拆股 / 分红 / ticker 变更")
+    p.add_argument("--corp-start", type=_date, default=None, help="拆股/分红起始日（默认不限）")
+    p.add_argument("--corp-end", type=_date, default=None, help="拆股/分红结束日（默认不限）")
+    p.add_argument(
+        "--events-limit",
+        type=int,
+        default=None,
+        help="只查前 N 个 composite FIGI 的 ticker 变更（小范围试跑用；默认全部）",
+    )
+    p.add_argument("--skip-events", action="store_true", help="不查 ticker 变更")
+    p.add_argument(
+        "--min-interval",
+        type=float,
+        default=massive.PAID_TIER_MIN_INTERVAL,
+        help="REST 两次请求的最小间隔秒数（Stocks Starter 不限次）",
+    )
+    return parser
+
+
+def _run_flatfiles(args, run_id: str) -> tuple[mi.FlatFilesRun, list[str]]:
+    creds = ff.read_flatfiles_credentials()
+    bucket = ff.DayAggsBucket(_flatfiles_client(creds))
+
+    def show(d: mi.DayResult) -> None:
+        print(
+            json.dumps(
+                {
+                    "date": d.date.isoformat(),
+                    "action": d.status,
+                    "batch_id": d.batch_id,
+                    "rows": d.rows,
+                    "content_sha256": d.content_sha256,
+                    "raw_bytes": d.raw_bytes,
+                    "retries": d.retries,
+                    "error": d.error_class,
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    run = mi.ingest_flatfiles(
+        args.root, bucket, start=args.start, end=args.end, run_id=run_id, on_day=show
+    )
+    failures = [f"{d.date}: {d.error_class}: {d.error}" for d in run.days if d.status == "failed"]
+    return run, failures
+
+
+def _run_reference(args, run_id: str) -> tuple[list[mi.ReferenceBatch], list[str]]:
+    api_key = read_api_key()  # 先读凭据：缺失即退出，不构造任何网络客户端
+    transport = KeyedTransport(
+        _keyed_http_opener(), api_key=api_key, min_interval=args.min_interval
+    )
+    fetch = transport.get
+    out: list[mi.ReferenceBatch] = []
+    failures: list[str] = []
+    tickers, meta = mi.ingest_tickers(args.root, fetch, run_id=run_id)
+    out.append(tickers)
+    out.extend(
+        mi.ingest_corporate_actions(
+            args.root,
+            fetch,
+            run_id=run_id,
+            instrument_meta=meta,
+            start=args.corp_start,
+            end=args.corp_end,
+        )
+    )
+    if not args.skip_events:
+        figis = mi.figis_for_events(meta)
+        if args.events_limit is not None:
+            figis = figis[: args.events_limit]
+        events = mi.ingest_ticker_events(args.root, fetch, figis, run_id=run_id)
+        if events is not None:
+            out.append(events)
+    for r in out:
+        print(
+            json.dumps(
+                {
+                    "name": r.name,
+                    "batch_id": r.batch_id,
+                    "rows": r.rows,
+                    "content_sha256": r.content_sha256,
+                    "raw_bytes": r.raw_bytes,
+                    **r.extra,
+                },
+                ensure_ascii=False,
+            )
+        )
+    return out, failures
+
+
+def main_us(argv: Sequence[str] | None = None) -> int:
+    """`quantime-ingest-us` 入口。凭据不可用 → exit 1（无回退）。"""
+    import time
+
+    args = build_us_parser().parse_args(argv)
+    run_id = args.run_id or new_run_id()
+    started = time.monotonic()
+    flat: mi.FlatFilesRun | None = None
+    reference: list[mi.ReferenceBatch] = []
+    try:
+        if args.command == "flatfiles":
+            flat, failures = _run_flatfiles(args, run_id)
+        elif args.command == "reference":
+            reference, failures = _run_reference(args, run_id)
+        else:  # pragma: no cover
+            raise AssertionError(f"未处理的子命令: {args.command}")
+    except CredentialUnavailableError as exc:
+        print(f"凭据不可用，退出: {exc}", file=sys.stderr)
+        return 1
+    now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    report = mi.build_report(
+        run_id=run_id,
+        report_date=now.date(),
+        generated_at=now,
+        flatfiles=flat,
+        reference=reference,
+        failures=failures,
+        elapsed_seconds=time.monotonic() - started,
+    )
+    json_path, md_path = mi.publish_report(args.root, report)
+    print(f"# report {json_path} {md_path}", file=sys.stderr)
+    print(
+        f"# run_id={run_id} coverage={report['coverage']} failures={len(failures)}",
+        file=sys.stderr,
+    )
+    return 1 if report["coverage"] == "failed" else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

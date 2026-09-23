@@ -1,0 +1,44 @@
+{
+  "request_id": "00000000000000000000000000000006",
+  "results": [
+    {
+      "cfi": "OCASPS",
+      "contract_type": "call",
+      "correction": 0,
+      "exercise_style": "american",
+      "expiration_date": "2021-11-19",
+      "primary_exchange": "BATO",
+      "shares_per_contract": 100,
+      "strike_price": 90,
+      "ticker": "O:AAPL211119C00090000",
+      "underlying_ticker": "AAPL"
+    },
+    {
+      "cfi": "OCASPS",
+      "contract_type": "call",
+      "exercise_style": "american",
+      "expiration_date": "2021-11-19",
+      "primary_exchange": "BATO",
+      "shares_per_contract": 100,
+      "strike_price": 85,
+      "ticker": "O:AAPL211119C00085000",
+      "underlying_ticker": "AAPL"
+    },
+    {
+      "additional_underlyings": [
+        {"amount": 44, "type": "equity", "underlying": "VMW"},
+        {"amount": 6.53, "type": "currency", "underlying": "USD"}
+      ],
+      "cfi": "OPASPS",
+      "contract_type": "put",
+      "exercise_style": "american",
+      "expiration_date": "2021-11-19",
+      "primary_exchange": "BATO",
+      "shares_per_contract": 100,
+      "strike_price": 85,
+      "ticker": "O:AAPL211119P00085000",
+      "underlying_ticker": "AAPL"
+    }
+  ],
+  "status": "OK"
+}

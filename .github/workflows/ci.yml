@@ -80,8 +80,35 @@ jobs:
           # 任何第二个 import 网络客户端的模块都可能绕过它们。
           # urllib.parse 是纯字符串解析、不出网，所以按子模块匹配而不是整个 urllib。
           deny "网络客户端只许出现在摄取 CLI 里" \
-            '^\s*(import|from)\s+(httpx|requests|websockets|socket|urllib\.request|http\.client)\b' \
+            '^\s*(import|from)\s+(httpx|requests|websockets|socket|urllib\.request|http\.client|boto3|botocore|aiobotocore)\b' \
             'quantime_data/cli\.py'
+
+          # QNT-47：allowlist host 字面量归位。只有 allowlist.py 许写 host 字符串，其余模块
+          # 引用具名条目（`MASSIVE_REST.host`）——否则会长出第二份绕过 allowlist 的 host 表，
+          # 上面那条主网 host 守卫的 grep 也随之失效。
+          # 刻意只匹配 `api.` 开头的域：`https://massive.com/docs/…` 与 `/legal/…` 是文档与
+          # 条款链接，不是出网目标，crypto-boundaries ① 反而要求适配器附上它们。
+          deny "allowlist host 字面量只许出现在 core allowlist 模块里" \
+            'binance\.vision|api\.massive\.com|api\.polygon\.io|files\.massive\.com' \
+            'quantime_core/allowlist\.py'
+
+          # QNT-47 / AGENTS.md §3：禁止手抄秘钥。值须 ≥21 字符且含小写字母，
+          # 所以 `API_KEY_ENV = "MASSIVE_API_KEY"` 这种全大写环境变量名不会被误报。
+          deny "不得出现 key 形态的字面量（key 只经 op 注入）" \
+            '([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Cc][Rr][Ee][Dd][Ee][Nn][Tt][Ii][Aa][Ll])[A-Za-z0-9_]*[[:space:]]*[=:][[:space:]]*"[A-Za-z0-9_+/.=-]{10,}[a-z][A-Za-z0-9_+/.=-]{10,}"'
+
+          # QNT-47 / AGENTS.md §3：`op://` 引用只许出现在 `*.tpl` 与 docs/ 里。代码里写它
+          # 等于把凭据位置硬编码进出网路径；`op run --env-file=<tpl>` 才是唯一注入口。
+          # 这条扫的是**被跟踪的全部文件**（不止 *.py），所以不走上面的 deny。
+          echo "--- op:// 引用只许在模板与文档里 ---"
+          # 只匹配真正的引用（`op://<vault>/…`），不匹配行文里提到的协议名；模式写成 `op:/[/]`
+          # 字符类，守卫自身的源码因此不会自我命中。
+          op_hits=$(git grep -lnE 'op:/[/][A-Za-z0-9_-]+/' \
+                    | grep -vE '\.tpl$|^docs/|^\.gitignore$|^AGENTS\.md$' || true)
+          if [ -n "$op_hits" ]; then
+            printf '%s\n' "$op_hits"
+            fail=1
+          fi
 
           exit "$fail"
 

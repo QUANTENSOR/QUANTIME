@@ -1,0 +1,28 @@
+{
+  "files": [
+    {
+      "file": "tickers-inactive-limit3.json",
+      "sanitized": "removed request_id",
+      "sha256": "400baa9b1006148059ded14053f1aeaf9aa2e27f8a57456012c94b2f0486080d",
+      "size": 1377,
+      "url": "https://api.massive.com/v3/reference/tickers?market=stocks&active=false&order=asc&sort=ticker&limit=3"
+    },
+    {
+      "file": "events-META.json",
+      "sanitized": "removed request_id",
+      "sha256": "9733a519dc4339d50ec4eed4061cde939d5b7252a64e7e91caebf28d7ced204d",
+      "size": 468,
+      "url": "https://api.massive.com/vX/reference/tickers/META/events?types=ticker_change"
+    },
+    {
+      "file": "day-aggs-2026-08-03-head100.csv",
+      "sanitized": "first 100 lines (header + 99 rows), decompressed",
+      "sha256": "34434ab8a0229ede7118d78b71ecef34e41cfdbdbfdb530a79c5c9237b13fb14",
+      "size": 8146,
+      "url": "https://files.massive.com/flatfiles/us_stocks_sip/day_aggs_v1/2026/08/2026-08-03.csv.gz"
+    }
+  ],
+  "note": "response bodies only; no request/response headers; no key in any URL",
+  "recorded_at": "2026-09-23",
+  "synthetic": false
+}

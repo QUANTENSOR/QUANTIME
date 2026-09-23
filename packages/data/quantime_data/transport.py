@@ -26,13 +26,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from quantime_core.allowlist import HostEntry, HostNotAllowedError, assert_public_readonly_host
+from quantime_core.allowlist import (
+    HostEntry,
+    HostNotAllowedError,
+    assert_public_readonly_host,
+    lookup,
+)
 
 #: 归档文件树的允许前缀。Vision 归档是按 symbol/freq/日期展开的目录树，文件名无法穷举，
 #: 所以这一类只能按前缀放行——但前缀之后的部分已被 `_canonical_path` 规范化过
@@ -112,6 +118,42 @@ class Response:
 Opener = Callable[[str], Response]
 
 
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def path_digest(path: str) -> str:
+    """被拒路径只回显 sha256 前 12 位：不在白名单的路径不可信，可能夹带 key。"""
+    return f"<path sha256:{_digest(path)}>"
+
+
+def redact_untrusted(url: str) -> str:
+    """**未过闸** URL 唯一允许进异常/日志/repr 的形态：`scheme://host/<path sha256:…>`。
+
+    「字符安全」不等于「不含凭据」：`/stocks/v1/FAKEKEY_xxx` 每个字符都在 ASCII 安全集里，
+    原样回显就是泄漏（QNT-47 返修 #2，verify-b P1）。所以未过闸的路径**任何一段**都不回显，
+    只给哈希；query 与 fragment 整段丢弃。scheme 只认 http/https，host 只有登记在
+    allowlist 里的才原样回显——否则 `https://<key>.evil.test/` 同样会漏。
+    """
+    try:
+        parts = urlsplit(url)
+        scheme, host = parts.scheme, parts.hostname or ""
+    except ValueError:
+        return f"<unparseable url sha256:{_digest(url)}>"
+    shown_scheme = scheme if scheme in ("http", "https") else "<scheme>"
+    shown_host = host if lookup(host) is not None else f"<host sha256:{_digest(host)}>"
+    return f"{shown_scheme}://{shown_host}/{path_digest(parts.path)}"
+
+
+def describe_trusted(host: str, template: str) -> str:
+    """**已过闸** URL 的回显形态：`https://host` + 白名单里的路径模板（不含实参、query）。
+
+    `template` 必须来自白名单常量本身（精确路径，或参数化模板的占位符形式），
+    调用方不得把请求里的原路径传进来。
+    """
+    return f"https://{host}{template}"
+
+
 def split_public_url(url: str) -> tuple[str, str]:
     """拆出 `(host, path)` 并做两道闸之前的形态校验。
 
@@ -146,19 +188,20 @@ def canonical_path(path: str) -> str:
     逐字节相同，中间不存在可被利用的规范化差异。
     """
     if not path.startswith("/"):
-        raise TransportBoundaryError(f"路径必须以 / 开头: {path!r}")
+        raise TransportBoundaryError(f"路径必须以 / 开头: {path_digest(path)}")
     for ch in _FORBIDDEN_PATH_CHARS:
         if ch in path:
             raise TransportBoundaryError(
-                f"路径含歧义字符 {ch!r}，拒绝发出请求（百分号编码/反斜杠/空白一律不接受）: {path!r}"
+                f"路径含歧义字符 {ch!r}，拒绝发出请求（百分号编码/反斜杠/空白一律不接受）: "
+                f"{path_digest(path)}"
             )
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in path):
-        raise TransportBoundaryError(f"路径含控制字符，拒绝发出请求: {path!r}")
+        raise TransportBoundaryError(f"路径含控制字符，拒绝发出请求: {path_digest(path)}")
     segments = path.split("/")[1:]
     for seg in segments:
         if seg in ("", ".", ".."):
             raise TransportBoundaryError(
-                f"路径含空段或点段（`//`、`.`、`..`），拒绝发出请求: {path!r}"
+                f"路径含空段或点段（`//`、`.`、`..`），拒绝发出请求: {path_digest(path)}"
             )
     return path
 
@@ -192,34 +235,38 @@ def assert_public_readonly_url(url: str) -> HostEntry:
     return entry
 
 
-class PublicTransport:
-    """公共只读 HTTP 出口：逐请求校验 + 限流退避。
+class Throttled:
+    """节流 + 退避的共用实现（`PublicTransport` 与 `KeyedTransport` 共享，QNT-47）。
 
-    `sleep` / `monotonic` / `jitter` 可注入，测试因此无需真的等待，也无需网络。
+    刻意**不**知道 host 闸、路径闸、凭据这些事——它只负责「两次请求之间保持最小间隔」
+    与「按状态码退避重试」。两个出口各自守自己的闸，退避这一段不该有第二份实现：
+    一份被改坏时另一份照绿，正是变异验证要抓的那种漂移。
+
+    `sleep` / `monotonic` / `jitter` 可注入，因此全部行为可离线测试。
     """
 
     def __init__(
         self,
-        opener: Opener,
         *,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         jitter: Callable[[], float] = random.random,
         min_interval: float = MIN_REQUEST_INTERVAL,
         backoff: tuple[float, ...] = BACKOFF_SCHEDULE,
+        max_backoff: float = MAX_BACKOFF,
     ) -> None:
-        self._opener = opener
         self._sleep = sleep
         self._monotonic = monotonic
         self._jitter = jitter
         self._min_interval = min_interval
         self._backoff = backoff
+        self._max_backoff = max_backoff
         self._last_request_at: float | None = None
         #: 供测试与运维核对：实际睡过的秒数序列。
         self.sleeps: list[float] = []
 
     def _pace(self) -> None:
-        """两次请求之间保持 `min_interval`（IP weight 的粗粒度保护）。"""
+        """两次请求之间保持 `min_interval`（限流配额的粗粒度保护）。"""
         if self._last_request_at is None:
             return
         elapsed = self._monotonic() - self._last_request_at
@@ -236,31 +283,67 @@ class PublicTransport:
         base = self._backoff[attempt]
         if retry_after is not None and retry_after > base:
             base = retry_after
-        return min(base + self._jitter() * base * 0.1, MAX_BACKOFF)
+        return min(base + self._jitter() * base * 0.1, self._max_backoff)
+
+    def _request(self, shown: str, open_once: Callable[[], Response]) -> bytes:
+        """节流 → 发出 → 按状态码决定退避重试。**闸由调用方在此之前守**。
+
+        `open_once` 是零参闭包，因此两个出口可以各自决定要不要带请求头——退避这一段
+        不必认识凭据，也不认识 URL：错误信息里只用调用方给的 `shown`（已脱敏的回显形态）。
+        """
+        last_status: int | None = None
+        for attempt in range(len(self._backoff) + 1):
+            self._pace()
+            response = open_once()
+            self._last_request_at = self._monotonic()
+            if response.status == 200:
+                return response.content
+            if response.status == 404:
+                raise FileNotFoundError(f"上游无此资源（404）: {shown}")
+            last_status = response.status
+            if response.status not in RETRYABLE_STATUS:
+                raise RateLimitedError(f"上游返回 HTTP {response.status}: {shown}")
+            if attempt == len(self._backoff):
+                break
+            self._nap(self._backoff_seconds(attempt, response.retry_after))
+        raise RateLimitedError(
+            f"退避重试 {len(self._backoff)} 次后仍为 HTTP {last_status}（最后一次）: {shown}"
+        )
+
+
+class PublicTransport(Throttled):
+    """公共只读 HTTP 出口：逐请求校验 + 限流退避。
+
+    `sleep` / `monotonic` / `jitter` 可注入，测试因此无需真的等待，也无需网络。
+    """
+
+    def __init__(
+        self,
+        opener: Opener,
+        *,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+        jitter: Callable[[], float] = random.random,
+        min_interval: float = MIN_REQUEST_INTERVAL,
+        backoff: tuple[float, ...] = BACKOFF_SCHEDULE,
+    ) -> None:
+        super().__init__(
+            sleep=sleep,
+            monotonic=monotonic,
+            jitter=jitter,
+            min_interval=min_interval,
+            backoff=backoff,
+        )
+        self._opener = opener
 
     def get(self, url: str) -> bytes:
         """取一个公共只读 URL 的正文。
 
         顺序：两道闸（任一不过 → 请求不发出）→ 节流 → 发出 → 按状态码决定退避重试。
-        非重试类错误状态码直接抛 `RateLimitedError` 的兄弟：这里统一用 `RateLimitedError`
-        仅限限流/5xx；4xx（如 404 缺文件）交给调用方按语义处理，故原样抛 `FileNotFoundError`。
+        限流/5xx 用尽重试抛 `RateLimitedError`；404（缺文件）抛 `FileNotFoundError`
+        交给调用方按语义处理。
         """
         assert_public_readonly_url(url)
-        last_status: int | None = None
-        for attempt in range(len(self._backoff) + 1):
-            self._pace()
-            response = self._opener(url)
-            self._last_request_at = self._monotonic()
-            if response.status == 200:
-                return response.content
-            if response.status == 404:
-                raise FileNotFoundError(f"上游无此文件（404）: {url}")
-            last_status = response.status
-            if response.status not in RETRYABLE_STATUS:
-                raise RateLimitedError(f"上游返回 HTTP {response.status}: {url}")
-            if attempt == len(self._backoff):
-                break
-            self._nap(self._backoff_seconds(attempt, response.retry_after))
-        raise RateLimitedError(
-            f"退避重试 {len(self._backoff)} 次后仍为 HTTP {last_status}（最后一次）: {url}"
-        )
+        # 公共出口不带凭据，且已过闸：回显 `https://host/path`（丢 query），便于对上缺的是哪个文件。
+        host, path = split_public_url(url)
+        return self._request(f"https://{host}{path}", lambda: self._opener(url))

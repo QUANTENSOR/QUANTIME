@@ -74,6 +74,9 @@ class MetaTable(StrEnum):
     INSTRUMENT_META = "instrument_meta"
     ADJUST_FACTOR = "adjust_factor"
     SOURCE_CONFLICT = "source_conflict"
+    #: QNT-47 阶段 2：代码变更事件（Massive `ticker_change`）。ADR-0003 §4.1 的 meta 表清单
+    #: 里没有它——planner 卡要求 `meta/ticker_events`，按卡新增（PR「文档矛盾」一节已报）。
+    TICKER_EVENTS = "ticker_events"
     INGESTION_BATCH = "ingestion_batch"
 
 
