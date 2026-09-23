@@ -11,7 +11,7 @@ research:
   - docs/research/other-markets-survey.md（QNT-26，PR #4，verify-b 审中）
 task: QNT-23（父 QNT-34；任务描述原文见 QNT-34 卡面，来源分支 ai_task_describe @ 9976805）
 revised: 2026-09-20（verify-a 第一轮：§5 基准协议、§4.1 单源不变量、§4.2 重放硬验收、allowlist 分层位置；第二轮：R1/R3/R4 校验边界、payload/content hash 分离、逐请求 fail-closed、§3.3 改为待批准提案）
-amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）
+amended: 2026-09-21（QNT-41 编者说明，承接 owner 5A）；2026-09-23（QNT-42 编者说明，承接 QNT-27/QNT-28 文档矛盾）
 ---
 
 # ADR-0003 系统架构（PROPOSED）
@@ -104,6 +104,8 @@ systemd/                           # unit 模板（*.tpl），值由 op 注入
 - `data/sources/base.py`：`DataSource` 实现类声明 `hosts: tuple[str, ...]`，基类 `__init__` 对每个 host 调 `assert_public_readonly_host`，且 `DataSource` 唯一 HTTP 出口 `PublicTransport.get(url)` 逐请求再次校验 host（对称于交易侧）；因此 `data.binance.vision` / `data-api.binance.vision` 必须以 `public_readonly=True` 进入 `ALLOWLIST`（crypto-boundaries ② 公共只读例外、ADR-0001 D1.8）。
 - CI grep（crypto-boundaries ②）范围不变：`packages/execution/**`、`packages/risk/**` 及任何持凭据模块禁止主网 host 字面量；`core/allowlist.py` 是**唯一**允许出现 `public_readonly=True` host 字面量的文件，且该文件本身不得 import 任何网络客户端（import-linter 规则）。
 
+> 编者说明（QNT-42，2026-09-23）：crypto-boundaries ② 写 CI grep 范围限定 `execution`/`risk`/持凭据模块（本阶段不存在）。现行 CI（QNT-27 PR #11，`.github/workflows/ci.yml`）范围为整个 `packages/` 非测试代码，严于原文。rules 原文已由 QNT-39 处理，本条不重复改、不改决策。
+
 ## 4. Decision — 数据层：Parquet 分区 + DuckDB 视图 + append-only 落地
 
 ### 4.1 目录规范（承接任务描述【描述2】，与 ADR-0002 D2.6/D2.7 对齐）
@@ -120,6 +122,8 @@ data/
 ```
 
 - 路径分量取值受 `packages/core/paths.py` 的枚举约束：`market ∈ {crypto, us, cn, hk}`；`asset_class ∈ {spot, perp, delivery, equity, etf, option, future, fund}`；`datatype ∈ {kline, trade, agg_trade, funding, open_interest, mark_price, book_depth, nav, dividend, corp_action}`；`freq ∈ {1m, 5m, 15m, 1h, 4h, 1d, 1w, 1mo, tick, event}`。**周期命名统一用 Vision 文件名口径 `1mo`，不用 REST 的 `1M`**（QNT-24 矛盾项，避免大小写歧义）。
+
+> 编者说明（QNT-42，2026-09-23）：§4.1 `freq` 含 `tick`/`event`，与 `datatype` 的合法组合未定义。现行实现（QNT-27 PR #11）只落枚举、不做交叉约束。交叉约束待后续卡，本条不新增决策。
 - 每个 Parquet 行必带 ADR-0002 列：`source, source_version, ingested_at, run_id, batch_id`。
 - **单源不变量（承接 ADR-0002 D2.5）**：一个 `batch_id` 只属于一个 `source`；一个 Parquet 文件内所有行的 `source` 列必须等于其路径的 `source=` 分量（写入侧断言，`checks.py` 抽样复核）。`raw/<source>/<batch_id>/` 天然单源。因此许可驱动的删除 = `rm -r data/raw/<source>/ data/lake/**/source=<source>/ data/meta/**/source=<source>/` + 在 `ingestion_batch` 追加 `tombstone` 行（`kind='license_drop'`，仍 append-only），逐行重写永不发生；执行前须 owner 确认并记 ADR 修订（D2.5 不变）。`source_conflict` 表按**写入方 source** 分区（冲突记录归属于发现冲突的那次摄取），删源时随之整体删除。
 - source→文件清单：`SELECT source, manifest_path FROM ingestion_batch WHERE source = ?` 即得该源全部文件（每个 batch 的 `manifest_path` 列出其所有 `part-*.parquet` 与 raw 文件及 sha）；删除前用它核对实际删除范围，删除后视图因 join 不到 `ingestion_batch` 有效行而自动不再暴露该源。
@@ -132,11 +136,15 @@ data/
 - 查询经 `read_parquet('data/lake/.../batch=*/**.parquet', hive_partitioning=true)`；复权价、连续合约等**派生价在视图层合成**，不落盘（QNT-26 §3.4 第 3 条）。
 - 重放：run 的 `manifest.json` 记录 `{tables: {name: {batch_ids: [...], files: [{path, sha256, size}]}}, config_hash, git_commit, result_sha256}`；重放读 manifest 的**精确文件清单**而非 `batch_id ≤ N`（回应 ADR-0002 未决项第 2 条，见 §9.4）。`batch_ids` 只能包含 run 开始时刻 `ingestion_batch` 中**已提交**的 batch（§4.3 提交顺序保证"已提交 ⇒ 文件完整且 sha 已知"）。
 
+> 编者说明（QNT-42，2026-09-23）：§4.2 未规定 `build_manifest` 的取证来源。现行实现（QNT-27 PR #11）：只从提交时固定的 batch 清单取证，目录只用于核对。本条不改 R1「恰好等于」语义。
+
 **重放硬验收（写进 QNT-27 验收，verify 须复现 + 变异）**：
 校验边界（R1/R3/R4 的统一口径）：**校验单位是 manifest 内每个 `batch_id` 的目录 `.../source=<s>/batch=<batch_id>/`**。对清单内的每个 batch 目录，实际文件集合必须**恰好等于** manifest 登记的集合（不缺、不多、sha/size 一致）——batch 目录在提交后不可变（§4.3），所以任何多出的文件都是变异而非合法数据。清单外的 batch 目录（含 R3 的晚到 batch、run 之后的正常新摄取）**不扫描、不校验、不读取**。因此"多出文件"只在 batch 目录粒度判定，永不会把晚到 batch 误判为变异。
 
 - R1 **hash 校验强制**：`replay(run_id)` 在读任何数据前，对 manifest 内每个 batch 目录执行上述"恰好等于"校验；任一 batch 目录缺文件、sha/size 不符、或**目录内**多出未登记文件 → 抛 `ReplayIntegrityError` 并**拒绝重放**，不降级、不跳过。DuckDB 读取用显式文件列表 `read_parquet([...])`，不用 glob，保证清单外文件在读取层也物理不可达。
 - R2 **逐字节一致（D2.4）**：重放产出的 `results/*.parquet` 的 `sha256` 必须等于 manifest 的 `result_sha256`；写 Parquet 时固定 writer 参数（行组大小、压缩、无 statistics 时间戳、列顺序）并在 `packages/core/parquet_io.py` 集中，确保 determinism。
+
+> 编者说明（QNT-42，2026-09-23）：§4.2 未规定 run 清单/结果文件的可覆盖性。现行实现（QNT-27 PR #11，`write_manifest` / 结果发布）：同 `run_id` 二次写入拒绝，原字节不变。
 - R3 **晚到/乱序提交不影响旧 run**：测试固定序列——batch 1 开始、batch 2 开始并提交、run R 在此时刻建 manifest（只含 batch 2）、batch 1 之后提交（其目录 `batch=<1>/` 与 batch 2 同分区）；`replay(R)` **通过校验**（batch 1 目录在清单外，不扫描）、结果与首跑逐字节一致且不含 batch 1 的行。
 - R4 **源文件变异被拒绝**：测试对 manifest 中任一 Parquet 翻转一个字节 / 删除一个文件 / **在清单内某个 `batch=<id>/` 目录下**新增一个未登记 `part-0001.parquet`，三种情形 `replay(R)` 均抛 `ReplayIntegrityError`（不是静默得到不同结果）。R3 与 R4 的区别只在文件落在清单内 batch 目录（拒绝）还是清单外 batch 目录（忽略）。
 - R5 **`ingestion_batch` 自身也在清单内**：manifest 记录 run 所依赖的 `ingestion_batch` 文件与 sha，防止用改写的 batch 表"合法化"未登记文件。
@@ -144,6 +152,14 @@ data/
 ### 4.3 `ingestion_batch` 表（ADR-0002 D2.7 落地）
 
 `batch_id`（ULID，单调）、`source`（单值，§4.1 单源不变量）、`source_version`、`market/asset_class/datatype/freq/scope`、`range_start/range_end`、`row_count`、`content_sha256`（归一化 Parquet 的 sha）、`raw_sha256`（raw 文件 sha）、`manifest_path`（该 batch 的文件级清单：每个 part 与 raw 文件的 path/sha256/size）、`committed_at`、`rerun_of`、`run_id`、`kind ∈ {ingest, rerun, license_drop}`。写入顺序：先落 raw → 写归一化 Parquet 到临时名（`.tmp-<batch_id>`，位于最终目录外的 `data/_staging/`）→ 计算 sha → rename 到最终路径 → 最后 insert `ingestion_batch` 行；**未出现在 `ingestion_batch` 的文件视为不存在**（视图只 join 已提交 batch；§4.2 R1 保证 run 层面也读不到）。
+
+> 编者说明（QNT-42，2026-09-23）：§4.3 未定义 `manifest_path` 的路径规范。现行实现（QNT-27 PR #11，`quantime_data.batches.batch_manifest_path`）取 `data/meta/batch_manifest/<batch_id>.json`。本条只记录路径，不改字段语义。
+
+> 编者说明（QNT-42，2026-09-23）：§4.3 未规定 batch 全局唯一性的判定时点与介质。现行实现（QNT-27 PR #11）：manifest 侧 `.lock` 独占创建（`data/meta/batch_manifest/<batch_id>.json.lock`，任何落盘之前）+ 所有最终文件不存在才发布；`ingestion_batch` 行不是唯一性判据。
+
+> 编者说明（QNT-42，2026-09-23）：§4.3 写入顺序表缺「取锁/唯一性登记」一步。现行顺序（QNT-27 PR #11）为「唯一性登记 → 临时名（`data/_staging/`）→ sha → 原子发布 → insert 行」。本条只记录现行顺序，不改 Decision。
+
+> 编者说明（QNT-42，2026-09-23）：§4.3「临时名 → sha → rename」未规定临时文件必须位于所有读侧枚举目录之外、发布必须单次不可覆盖。现行实现（QNT-27 PR #11）：临时文件位于 `data/_staging/`，发布为 `os.link` 单次不可覆盖原子操作。
 
 ## 5. Decision — 性能策略与可量化验收
 
@@ -155,6 +171,10 @@ data/
 **基准输入（`fixtures/bench/` 由 QNT-27 落地，生成脚本入库，生成物不入库）**
 - 合成数据：`bench_gen.py --seed 20260920 --symbols 1000 --days 1260 --start 2021-01-04`，几何布朗运动日 K（`mu=0, sigma=0.02/√252`，`open=prev_close`，`high/low = close·(1±|N(0,0.01)|)`，`volume ~ LogNormal(12, 1)`），`freq=1d`，`market=crypto/asset_class=spot`，按 `CRYPTO_24_7` 日历取**连续 1,260 个自然日**（2021-01-04 → 2024-06-16，约 3.45 年；本文一律以"1,260 日"计，不再称"5 年"）。
 - **两个 hash 分离**：(a) `payload_sha256` = 生成器输出的**纯业务列** Arrow 表（`symbol, ts, open, high, low, close, volume`，固定列序与 dtype，用 `packages/core/parquet_io.py` 的确定性 writer 序列化）的 sha256，**不含** ADR-0002 provenance 列；该值由 `bench_gen.py` 打印，是所有实现必须一致的"基准输入指纹"，并作为常量写进 `fixtures/bench/EXPECTED.json` 由测试断言。(b) 随后 payload 经 §4.3 正常摄取流程写为 1 个 batch（`source='synthetic_bench'`，`source_version=<seed>`），得到的 `ingestion_batch.content_sha256` 含 `ingested_at/run_id/batch_id`，**每次运行不同，只记录不比较**；报告同时贴 (a) 与 (b)，验收只断言 (a) 相等。D2.2 provenance 列不做任何特殊化。
+
+> 编者说明（QNT-42，2026-09-23）：ADR-0002 D2.2 的 `source` 枚举不含 `synthetic_bench`，与本节 `source='synthetic_bench'` 冲突。现行实现（QNT-27 PR #11，`quantime_core.paths.assert_source`）只校验小写 snake 格式、不硬编码枚举。枚举是否扩展属决策内容，待 owner 裁决；本卡不改 ADR-0002。
+
+> 编者说明（QNT-42，2026-09-23）：§5.1 未规定基准输入的跨机器复现边界。已由 QNT-40（PR #13，`0fdf657`）承接：复现边界为**任意机器**（任意 x86-64 GitHub runner 与本地 LXC）逐位相等，而非仅同机两次；现行实现通过 `quantime_core.detmath.exp` 避开 CPU 分派达成；`payload_sha256` 比较为精确相等、未放宽。已证实的漂移源只有 close 路径的 `np.exp`（生成第 7 步）；`rng.lognormal`（volume）替换属防御措施，不是第二个已复现漂移源。CI `bench-repro` 矩阵是本轮证据来源（日志覆盖含原生 AVX-512 的 4 种 CPU），hosted runner 标签不保证未来每轮硬件覆盖。
 - 固定 20 因子（表达式 DSL，QNT-29 按此清单实现，不许替换）：`ret_1, ret_5, ret_20, ma_5/close-1, ma_20/close-1, ma_60/close-1, std_20(ret_1), std_60(ret_1), max_20(high)/close-1, min_20(low)/close-1, rsi_14, ts_rank_20(close), corr_20(close, volume), skew_20(ret_1), kurt_20(ret_1), vol_ratio_5_20, amihud_20, macd_12_26_9, bb_pos_20_2, mom_reversal_20_5`（定义写在 `fixtures/bench/factors.yaml`，随 ADR 修订）。
 - 固定策略与成本（QNT-30）：每日 `ts_rank_20(close)` 截面 top 10% 等权多头，日频再平衡，全仓；手续费 `10 bp` 单边、滑点 `5 bp` 固定比例、资金费率 `0`（现货基准；perp 黄金用例另计，crypto-boundaries ③）；初始资金 `1e6`。
 - 摄取基准输入：合成 Vision 风格 zip（同 seed，`300 币对 × 1 个月日 K`，CSV 列序与 Vision 一致），由 `bench_gen.py --mode vision-zip` 生成，不走网络。
@@ -220,6 +240,8 @@ data/
 > 编者说明（QNT-41，2026-09-21）：owner 已于 2026-09-21 裁决 5A 批准本迁移；'批准前不实施'状态已解除。rules 回写由 QNT-39（PR #9）独立完成，`core/allowlist.py` 文件由 QNT-27 随骨架创建，两者非同一 PR；此为对本节'由 QNT-27 在同一个 PR 内完成两件事'的实施方式变更，边界语义不变。
 13. **ADR-0001 D1.7 OKX/Bitget 请求头校验层次**：D1.7 写"校验请求头"，未写在哪一层；本 ADR §3.3 明确为逐请求 fail-closed，并将 OKX/Bitget 适配器推到二期（第一阶段只有 Binance testnet transport）。是否回写 D1.7 措辞待 owner。
 11. **fixtures 数据口径**：QNT-23 卡面写"仓库只放小样本合成/公开数据"，AGENTS.md §2 写"`fixtures/` 只放合成数据"；本 ADR §1 与 §3.2 按 AGENTS.md（仅合成）执行，公开数据只经摄取进入 `data/`。卡面措辞由 planner 在卡上修正。
+
+> 编者说明（QNT-42，2026-09-23）：AGENTS.md §2「`fixtures/` 只放合成数据（`synthetic: true` 头）」与外部接入离线重放需要真实响应字节冲突。现行做法（QNT-28 偏离项 3 / verify-a 复审）：`fixtures/binance_public/` 逐目录豁免、`synthetic: false` + `MANIFEST.json`（url/sha256/size）、只落响应正文不落请求/响应头。AGENTS.md 原文待 owner 裁决；本卡不改 AGENTS.md。
 12. **ADR-0002 D2.6 raw 分文件粒度**：D2.6 写 `source/quote_date`，本 ADR §4.1 用 `raw/<source>/<batch_id>/`（batch 内可再按日期分文件）；`source` 仍是第一层，D2.5 整体删源不受影响。是否回写 D2.6 措辞随第 4 条一并裁决。
 
 ## 10. Consequences / Revisit trigger
