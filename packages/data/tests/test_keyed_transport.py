@@ -433,7 +433,7 @@ def test_split_keyed_url_returns_host_and_path():
 import logging  # noqa: E402
 import secrets  # noqa: E402
 
-from quantime_data.transport import redact_url  # noqa: E402
+from quantime_data.transport import describe_trusted, redact_untrusted  # noqa: E402
 
 
 def _fake_key() -> str:
@@ -540,16 +540,20 @@ def test_http_errors_after_the_gate_do_not_echo_the_query():
     assert "cursor" not in str(info.value) and "?" not in str(info.value)
 
 
-def test_redact_url_keeps_only_scheme_host_path():
-    assert (
-        redact_url(f"https://{HOST}/stocks/v1/splits?apiKey=x#y")
-        == f"https://{HOST}/stocks/v1/splits"
-    )
+def test_redact_untrusted_keeps_no_segment_of_the_path():
+    shown = redact_untrusted(f"https://{HOST}/stocks/v1/splits?apiKey=x#y")
+    assert shown.startswith(f"https://{HOST}/<path sha256:")
+    assert "stocks" not in shown and "splits" not in shown and "apiKey" not in shown
 
 
-def test_redact_url_hashes_paths_outside_the_safe_charset():
-    shown = redact_url(f"https://{HOST}/stocks/%41piKey%3Dsecret")
-    assert "secret" not in shown and "sha256:" in shown
+def test_redact_untrusted_hashes_unregistered_hosts():
+    key = _fake_key()
+    shown = redact_untrusted(f"https://{key}.evil.test/x")
+    assert key not in shown and "<host sha256:" in shown
+
+
+def test_describe_trusted_is_host_plus_template():
+    assert describe_trusted(HOST, "/stocks/v1/splits") == f"https://{HOST}/stocks/v1/splits"
 
 
 def test_a_lookalike_key_that_is_not_a_credential_still_passes():
@@ -557,3 +561,84 @@ def test_a_lookalike_key_that_is_not_a_credential_still_passes():
     assert_keyed_readonly_url(
         f"https://{HOST}/stocks/v1/splits?ticker=AAPL&cursor=abc&sort=execution_date.asc"
     )
+
+
+# ---- 返修 #2（verify-b P1）：未过闸的路径任何一段都不回显（字符安全 ≠ 不含凭据）----
+
+
+def _assert_key_absent_everywhere(key: str, url: str, caplog) -> None:
+    """未过闸的 URL：opener 零调用，且 key 不出现在任何一个回显出口里。"""
+    caplog.set_level(logging.DEBUG)
+    transport, opener = make_transport(Response(200, b"should-not-be-fetched"))
+    with pytest.raises(TransportBoundaryError) as info:
+        transport.get(url)
+    assert opener.calls == [], f"被拒的 URL 仍到了 opener: {len(opener.calls)} 次"
+    request = KeyedRequest(url=url, headers={"Authorization": f"Bearer {key}"})
+    exc = info.value
+    outlets = {
+        "str(exc)": str(exc),
+        "repr(exc)": repr(exc),
+        "str(exc.__cause__)": str(exc.__cause__),
+        "redact_untrusted(url)": redact_untrusted(url),
+        "repr(KeyedRequest)": repr(request),
+        "str(KeyedRequest)": str(request),
+        "repr(transport)": repr(transport),
+        "str(transport)": str(transport),
+    }
+    outlets.update({f"caplog[{i}]": r.getMessage() for i, r in enumerate(caplog.records)})
+    leaked = [name for name, text in outlets.items() if key in text]
+    assert not leaked, f"key 从这些出口泄漏: {leaked}"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "https://{host}/stocks/v1/{k}",  # verify-b 第二轮复现：纯 ASCII 路径段
+        "https://{host}/stocks/v1/{k}#frag",
+        "http://{host}/stocks/v1/{k}",
+        "https://{host}/stocks/v1/{k}?apiKey={k}",  # 路径 + query 同时含 K
+        "https://{host}/v2/aggs/ticker/{k}/range/1/day/2024-01-01/2024-01-31",
+        "https://{host}/stocks/v1/splits/{k}",  # 白名单路径前缀 + 多一段
+        "https://{k}.evil.test/stocks/v1/splits",  # key 在 host 里
+        "https://evil.test/{k}",
+    ],
+)
+def test_a_key_anywhere_in_an_ungated_url_never_reaches_any_outlet(template, caplog):
+    key = _fake_key()
+    _assert_key_absent_everywhere(key, template.format(host=HOST, k=key), caplog)
+
+
+def test_the_success_path_logs_only_the_template_not_the_arguments(caplog):
+    caplog.set_level(logging.DEBUG, logger="quantime_data.keyed_transport")
+    transport, opener = make_transport(Response(200, b"body"))
+    url = f"https://{HOST}/v2/aggs/ticker/AAPL/range/1/day/2024-01-01/2024-01-31?adjusted=false"
+    request = transport.build_request(url)
+    assert transport.get(url) == b"body"
+    assert opener.calls and opener.calls[0][0] == url, "成功路径发出的 URL 必须是原 URL"
+    template = f"https://{HOST}/v2/aggs/ticker/{{ticker}}/range/1/day/{{from}}/{{to}}"
+    assert repr(request) == f"KeyedRequest(url={template!r}, headers=<redacted 1 项>)"
+    messages = [r.getMessage() for r in caplog.records]
+    assert messages, "成功路径没有 debug 日志——本条断言成了空集通过"
+    for message in messages:
+        assert template in message
+        for forbidden in ("AAPL", "2024-01-01", "adjusted", "false", "Bearer", FAKE_KEY, "?"):
+            assert forbidden not in message, f"{forbidden!r} 进了日志: {message}"
+
+
+def test_a_fixed_whitelisted_path_is_shown_as_itself():
+    transport, _ = make_transport()
+    request = transport.build_request(f"https://{HOST}/stocks/v1/splits?ticker=AAPL")
+    assert request.shown == f"https://{HOST}/stocks/v1/splits"
+
+
+def test_http_errors_after_the_gate_show_the_template_only():
+    transport, _ = make_transport(Response(404, b""))
+    with pytest.raises(FileNotFoundError) as info:
+        transport.get(GOOD_URL)
+    assert "{ticker}" in str(info.value) and "AAPL" not in str(info.value)
+
+
+def test_a_directly_built_request_is_untrusted_and_shows_only_a_digest():
+    """绕过 `build_request` 直接构造的请求没过闸：`shown` 默认走 `redact_untrusted`。"""
+    request = KeyedRequest(url=GOOD_URL, headers={})
+    assert "AAPL" not in repr(request) and "<path sha256:" in repr(request)

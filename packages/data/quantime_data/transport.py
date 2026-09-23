@@ -28,13 +28,17 @@ from __future__ import annotations
 
 import hashlib
 import random
-import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from quantime_core.allowlist import HostEntry, HostNotAllowedError, assert_public_readonly_host
+from quantime_core.allowlist import (
+    HostEntry,
+    HostNotAllowedError,
+    assert_public_readonly_host,
+    lookup,
+)
 
 #: 归档文件树的允许前缀。Vision 归档是按 symbol/freq/日期展开的目录树，文件名无法穷举，
 #: 所以这一类只能按前缀放行——但前缀之后的部分已被 `_canonical_path` 规范化过
@@ -114,33 +118,40 @@ class Response:
 Opener = Callable[[str], Response]
 
 
-#: 可以原样回显的路径/host 字符集。超出它的（百分号、空白、控制字符……）一律只给哈希。
-_SAFE_ECHO_RE = re.compile(r"[A-Za-z0-9/._:-]*\Z")
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def path_digest(path: str) -> str:
     """被拒路径只回显 sha256 前 12 位：不在白名单的路径不可信，可能夹带 key。"""
-    return f"<path sha256:{hashlib.sha256(path.encode()).hexdigest()[:12]}>"
+    return f"<path sha256:{_digest(path)}>"
 
 
-def redact_url(url: str) -> str:
-    """把 URL 变成**可以进异常/日志的形态**：只留 `scheme://host/path`，丢掉 query 与 fragment。
+def redact_untrusted(url: str) -> str:
+    """**未过闸** URL 唯一允许进异常/日志/repr 的形态：`scheme://host/<path sha256:…>`。
 
-    需凭据的出口在凭据检查**之前**就可能要报错（scheme 不对、host 不在表内……），而那时
-    URL 里可能正拼着 key（QNT-47 返修 #1，verify-b P1）。所以错误信息一律经过这里：
-    query/fragment 整段丢弃；host 或 path 里出现安全字符集以外的字符时，连它们也不回显，
-    只给 sha256 前 12 位——足够在日志里对上是哪一次请求，又不泄漏任何原文。
+    「字符安全」不等于「不含凭据」：`/stocks/v1/FAKEKEY_xxx` 每个字符都在 ASCII 安全集里，
+    原样回显就是泄漏（QNT-47 返修 #2，verify-b P1）。所以未过闸的路径**任何一段**都不回显，
+    只给哈希；query 与 fragment 整段丢弃。scheme 只认 http/https，host 只有登记在
+    allowlist 里的才原样回显——否则 `https://<key>.evil.test/` 同样会漏。
     """
     try:
         parts = urlsplit(url)
-        scheme, host, path = parts.scheme, parts.hostname or "", parts.path
+        scheme, host = parts.scheme, parts.hostname or ""
     except ValueError:
-        return f"<unparseable url sha256:{hashlib.sha256(url.encode()).hexdigest()[:12]}>"
-    if not (_SAFE_ECHO_RE.match(scheme) and _SAFE_ECHO_RE.match(host)):
-        return f"<url sha256:{hashlib.sha256(url.encode()).hexdigest()[:12]}>"
-    if not _SAFE_ECHO_RE.match(path):
-        path = f"/<path sha256:{hashlib.sha256(path.encode()).hexdigest()[:12]}>"
-    return f"{scheme}://{host}{path}"
+        return f"<unparseable url sha256:{_digest(url)}>"
+    shown_scheme = scheme if scheme in ("http", "https") else "<scheme>"
+    shown_host = host if lookup(host) is not None else f"<host sha256:{_digest(host)}>"
+    return f"{shown_scheme}://{shown_host}/{path_digest(parts.path)}"
+
+
+def describe_trusted(host: str, template: str) -> str:
+    """**已过闸** URL 的回显形态：`https://host` + 白名单里的路径模板（不含实参、query）。
+
+    `template` 必须来自白名单常量本身（精确路径，或参数化模板的占位符形式），
+    调用方不得把请求里的原路径传进来。
+    """
+    return f"https://{host}{template}"
 
 
 def split_public_url(url: str) -> tuple[str, str]:
@@ -274,11 +285,11 @@ class Throttled:
             base = retry_after
         return min(base + self._jitter() * base * 0.1, self._max_backoff)
 
-    def _request(self, url: str, open_once: Callable[[], Response]) -> bytes:
+    def _request(self, shown: str, open_once: Callable[[], Response]) -> bytes:
         """节流 → 发出 → 按状态码决定退避重试。**闸由调用方在此之前守**。
 
         `open_once` 是零参闭包，因此两个出口可以各自决定要不要带请求头——退避这一段
-        不必认识凭据。
+        不必认识凭据，也不认识 URL：错误信息里只用调用方给的 `shown`（已脱敏的回显形态）。
         """
         last_status: int | None = None
         for attempt in range(len(self._backoff) + 1):
@@ -288,16 +299,15 @@ class Throttled:
             if response.status == 200:
                 return response.content
             if response.status == 404:
-                raise FileNotFoundError(f"上游无此资源（404）: {redact_url(url)}")
+                raise FileNotFoundError(f"上游无此资源（404）: {shown}")
             last_status = response.status
             if response.status not in RETRYABLE_STATUS:
-                raise RateLimitedError(f"上游返回 HTTP {response.status}: {redact_url(url)}")
+                raise RateLimitedError(f"上游返回 HTTP {response.status}: {shown}")
             if attempt == len(self._backoff):
                 break
             self._nap(self._backoff_seconds(attempt, response.retry_after))
         raise RateLimitedError(
-            f"退避重试 {len(self._backoff)} 次后仍为 HTTP {last_status}（最后一次）: "
-            f"{redact_url(url)}"
+            f"退避重试 {len(self._backoff)} 次后仍为 HTTP {last_status}（最后一次）: {shown}"
         )
 
 
@@ -334,4 +344,6 @@ class PublicTransport(Throttled):
         交给调用方按语义处理。
         """
         assert_public_readonly_url(url)
-        return self._request(url, lambda: self._opener(url))
+        # 公共出口不带凭据，且已过闸：回显 `https://host/path`（丢 query），便于对上缺的是哪个文件。
+        host, path = split_public_url(url)
+        return self._request(f"https://{host}{path}", lambda: self._opener(url))

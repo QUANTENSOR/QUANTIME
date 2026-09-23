@@ -21,8 +21,10 @@ Massive 的数据要 API key 才取得到，所以它走不了公共只读出口
    query 先按 `parse_qsl` **解码**（百分号、`+`，再多解一层防双重编码）再判键名，
    解码后的键（去掉 `_`/`-`，大小写不敏感）命中凭据形态（`apikey` / `token` /
    `accesstoken` / `authorization` / `key` …）就拒绝；带 fragment 的 URL 直接拒。
-   **凭据检查之前**任何错误信息都不回显完整 URL，只给 `transport.redact_url` 的形态
-   （`scheme://host/path` 或 sha256 前 12 位）——那时 URL 里可能正拼着 key。
+   **未过闸的 URL 一律不可信**：异常 / 日志 / `repr` 只给 `transport.redact_untrusted`
+   的形态（`scheme://host/<path sha256:…>`，路径任何一段都不回显）——那时 URL 里
+   可能正拼着 key，而 key 完全可以只由「安全」字符组成。过闸之后也只回显白名单
+   **模板**（`describe_trusted`），不回显实参与 query。
 
 限流：免费 / Basic 档对未订阅资产类限 5 请求/分钟，超限 HTTP 429（官方知识库）。
 本出口默认按 `massive.FREE_TIER_MIN_INTERVAL`（12 秒）节流，退避与重试**复用**
@@ -41,7 +43,7 @@ import logging
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, unquote_plus, urlsplit
 
 from quantime_core.allowlist import (
@@ -56,11 +58,12 @@ from .transport import (
     Throttled,
     TransportBoundaryError,
     canonical_path,
+    describe_trusted,
     path_digest,
-    redact_url,
+    redact_untrusted,
 )
 
-#: 本出口的日志只记 `redact_url` 形态的 URL 与状态，从不记请求头、query 或 key。
+#: 本出口的日志只记白名单模板形态的 URL 与字节数，从不记请求头、query 或 key。
 log = logging.getLogger(__name__)
 
 #: 环境变量名。值由 `op run` 注入；仓库里只有 `*.tpl` 允许出现 `op://` 引用。
@@ -81,12 +84,21 @@ KEYED_READONLY_PATHS: frozenset[str] = frozenset(
 #: `multiplier` 固定 `1`、`timespan` 固定 `day`——本卡只做日线，把它们写死而不是放开成
 #: `[0-9]+/[a-z]+`，等于把「不小心拉了分钟线」这件事挡在出口上。
 #: 收尾用 `\Z` 而非 `$`（`$` 会放过结尾换行，见 `sources/massive.py` 同处注释）。
-KEYED_READONLY_PATH_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"^/v2/aggs/ticker/"
-        r"(?:[A-Z][A-Z0-9.]{0,15}|O:[A-Z][A-Z0-9]{0,5}[0-9]{6}[CP][0-9]{8})"
-        r"/range/1/day/[0-9]{4}-[0-9]{2}-[0-9]{2}/[0-9]{4}-[0-9]{2}-[0-9]{2}\Z"
+KEYED_READONLY_PATH_TEMPLATES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "/v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}",
+        re.compile(
+            r"^/v2/aggs/ticker/"
+            r"(?:[A-Z][A-Z0-9.]{0,15}|O:[A-Z][A-Z0-9]{0,5}[0-9]{6}[CP][0-9]{8})"
+            r"/range/1/day/[0-9]{4}-[0-9]{2}-[0-9]{2}/[0-9]{4}-[0-9]{2}-[0-9]{2}\Z"
+        ),
     ),
+)
+
+#: 只取正则的视图（守卫与测试按正则扫）。每条模板的占位符形式只用于回显：过闸后的
+#: 日志/异常里出现的是 `{ticker}` 而不是实参（QNT-47 返修 #2）。
+KEYED_READONLY_PATH_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    pattern for _, pattern in KEYED_READONLY_PATH_TEMPLATES
 )
 
 #: 兼容 `PUBLIC_READONLY_PREFIXES` 的形态：守卫用它一次扫全集（模板取其正则原文）。
@@ -121,20 +133,23 @@ class CredentialUnavailableError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class KeyedRequest:
-    """一个已过闸的请求：URL + 要带的请求头。
+    """一个已过闸的请求：URL + 要带的请求头 + 可回显形态 `shown`。
 
-    凭据在 `headers` 里，不在 `url` 里——所以把 `url` 打进日志是安全的，而这个对象
-    本身不该被 `repr` 到日志里。`__repr__` 因此被覆写成打码形式。
+    凭据在 `headers` 里，不在 `url` 里；但 `url` 本身也不回显——`repr`/`str` 只用构造时
+    就定下的 `shown`：`build_request` 给白名单模板形态，直接构造时（未经过闸）默认
+    `redact_untrusted(url)`，即 host + 路径哈希。
     """
 
     url: str
     headers: dict[str, str]
+    shown: str = field(default="")
+
+    def __post_init__(self) -> None:
+        if not self.shown:
+            object.__setattr__(self, "shown", redact_untrusted(self.url))
 
     def __repr__(self) -> str:
-        # 只回显 `scheme://host/path`：query 虽已过凭据闸，也没有理由进日志。
-        return (
-            f"KeyedRequest(url={redact_url(self.url)!r}, headers=<redacted {len(self.headers)} 项>)"
-        )
+        return f"KeyedRequest(url={self.shown!r}, headers=<redacted {len(self.headers)} 项>)"
 
     __str__ = __repr__
 
@@ -176,10 +191,10 @@ def split_keyed_url(url: str) -> tuple[str, str]:
     只接受 https（凭据绝不走明文）；带 `user:pass@` 或 fragment 的 URL 直接拒绝；query
     **解码后**出现疑似凭据的键直接拒绝——key 只走请求头。
 
-    本函数跑在凭据检查**之前**，所以它的每一条错误信息都只用 `redact_url(url)`，
-    绝不回显原始 URL。
+    本函数跑在所有闸**之前**，所以它的每一条错误信息都只用 `redact_untrusted(url)`，
+    绝不回显原始 URL 的路径、query 或 fragment。
     """
-    shown = redact_url(url)
+    shown = redact_untrusted(url)
     try:
         parts = urlsplit(url)
         hostname = parts.hostname
@@ -205,30 +220,51 @@ def split_keyed_url(url: str) -> tuple[str, str]:
     return hostname, parts.path
 
 
-def assert_keyed_readonly_path(path: str) -> str:
-    """路径闸：先规范化校验，再按精确集合 / 参数化模板放行。"""
+def keyed_path_template(path: str) -> str | None:
+    """路径在白名单内则返回其**回显模板**（精确路径即自身，参数化路径给占位符），否则 `None`。"""
     path = canonical_path(path)
     if path in KEYED_READONLY_PATHS:
         return path
-    for pattern in KEYED_READONLY_PATH_PATTERNS:
+    for template, pattern in KEYED_READONLY_PATH_TEMPLATES:
         if pattern.fullmatch(path):
-            return path
+            return template
+    return None
+
+
+def assert_keyed_readonly_path(path: str) -> str:
+    """路径闸：先规范化校验，再按精确集合 / 参数化模板放行。"""
+    if keyed_path_template(path) is not None:
+        return path
     raise TransportBoundaryError(
         f"路径不在需 key 的只读白名单内，拒绝发出请求: {path_digest(path)}"
-        f"（新增端点须先进 KEYED_READONLY_PATHS/PATTERNS，且必须是只读数据端点；"
+        f"（新增端点须先进 KEYED_READONLY_PATHS/PATH_TEMPLATES，且必须是只读数据端点；"
         f"任何账户/交易/订单端点一律不得加入）"
     )
 
 
-def assert_keyed_readonly_url(url: str) -> HostEntry:
-    """三道闸里的前两道一起过（凭据闸在 `KeyedTransport` 组装请求头时守）。"""
+def gate_keyed_url(url: str) -> tuple[HostEntry, str]:
+    """三道闸里的前两道一起过，返回 `(条目, 回显形态)`。
+
+    host 闸的原异常**不**挂在 `__cause__` 上：它的消息原样回显 host，而未过闸的 host
+    同样不可信（`<key>.evil.test`）。
+    """
     host, path = split_keyed_url(url)
     try:
         entry = assert_credentialed_readonly_host(host)
-    except HostNotAllowedError as exc:
-        raise TransportBoundaryError(str(exc)) from exc
+    except HostNotAllowedError:
+        raise TransportBoundaryError(
+            f"host 不在 allowlist 或不是需 key 的只读数据 host（credentialed_readonly），"
+            f"拒绝发出请求: {redact_untrusted(url)}"
+        ) from None
     assert_keyed_readonly_path(path)
-    return entry
+    template = keyed_path_template(path)
+    assert template is not None  # 上一行已放行
+    return entry, describe_trusted(host, template)
+
+
+def assert_keyed_readonly_url(url: str) -> HostEntry:
+    """三道闸里的前两道一起过（凭据闸在 `KeyedTransport` 组装请求头时守）。"""
+    return gate_keyed_url(url)[0]
 
 
 class KeyedTransport(Throttled):
@@ -260,8 +296,10 @@ class KeyedTransport(Throttled):
 
     def build_request(self, url: str) -> KeyedRequest:
         """过闸并组装请求。**公开**是为了让 CLI 在真正发出之前再验一次规范化后的 URL。"""
-        assert_keyed_readonly_url(url)
-        return KeyedRequest(url=url, headers={"Authorization": f"Bearer {self._api_key}"})
+        _, shown = gate_keyed_url(url)
+        return KeyedRequest(
+            url=url, headers={"Authorization": f"Bearer {self._api_key}"}, shown=shown
+        )
 
     def get(self, url: str) -> bytes:
         """取一个需 key 的只读 URL 的正文。
@@ -270,7 +308,9 @@ class KeyedTransport(Throttled):
         重试用尽抛 `RateLimitedError`，404 抛 `FileNotFoundError`——绝不静默返回空。
         """
         request = self.build_request(url)
-        log.debug("keyed GET %s", redact_url(request.url))
-        body = self._request(url, lambda: self._opener(request.url, dict(request.headers)))
-        log.debug("keyed GET %s -> %d 字节", redact_url(request.url), len(body))
+        log.debug("keyed GET %s", request.shown)
+        body = self._request(
+            request.shown, lambda: self._opener(request.url, dict(request.headers))
+        )
+        log.debug("keyed GET %s -> %d 字节", request.shown, len(body))
         return body
