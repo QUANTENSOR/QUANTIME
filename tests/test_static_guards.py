@@ -126,15 +126,49 @@ NON_SYNTHETIC_FIXTURE_DIRS = {
 }
 
 
+def _declares_synthetic(d):
+    """目录是否自证合成：MANIFEST.json 带 `"synthetic": true`，或有文件带 `synthetic: true` 头。"""
+    import json
+
+    manifest = d / "MANIFEST.json"
+    if manifest.is_file():
+        try:
+            return json.loads(manifest.read_text(encoding="utf-8")).get("synthetic") is True
+        except OSError, ValueError:
+            return False
+    return False
+
+
 def test_only_the_declared_fixture_dir_holds_non_synthetic_data():
-    """录制 fixture 是**逐目录**豁免，不是对 fixtures/ 整体放行。"""
+    """录制 fixture 是**逐目录**豁免，不是对 fixtures/ 整体放行。
+
+    一个目录要么**自证合成**（MANIFEST.json 里 `synthetic: true`），要么在
+    `NON_SYNTHETIC_FIXTURE_DIRS` 里写明为什么必须是录制的。两样都没有 = 来路不明。
+    """
     fixtures = REPO / "fixtures"
-    dirs = {p.name for p in fixtures.iterdir() if p.is_dir() and p.name != "__pycache__"}
+    dirs = {
+        p.name
+        for p in fixtures.iterdir()
+        if p.is_dir() and p.name != "__pycache__" and not _declares_synthetic(p)
+    }
     undeclared = dirs - {"bench"} - set(NON_SYNTHETIC_FIXTURE_DIRS)
     assert undeclared == set(), (
         f"新 fixture 目录未声明合成性: {sorted(undeclared)}"
         "（合成数据加 `synthetic: true` 头；录制数据须在 NON_SYNTHETIC_FIXTURE_DIRS 注明理由）"
     )
+
+
+def test_synthetic_self_declaration_is_not_a_blanket_pass(tmp_path):
+    """反证：缺 MANIFEST / `synthetic: false` 的目录不算已声明，否则上一条就成了摆设。"""
+    import json
+
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert not _declares_synthetic(bare)
+    (bare / "MANIFEST.json").write_text(json.dumps({"synthetic": False}), encoding="utf-8")
+    assert not _declares_synthetic(bare)
+    (bare / "MANIFEST.json").write_text(json.dumps({"synthetic": True}), encoding="utf-8")
+    assert _declares_synthetic(bare)
 
 
 def test_recorded_fixtures_declare_their_provenance_and_record_no_headers():
@@ -360,3 +394,192 @@ def test_rerun_is_recorded_as_kind_not_source():
     assert assert_batch_kind("rerun") == "rerun"
     with pytest.raises(PathSpecError):
         assert_batch_kind("source_rerun")
+
+
+# ---- QNT-48：需凭据的数据源接入（Tushare Pro）----
+
+#: key 形态字面量的 grep 模式（卡：「CI 静态守卫：grep 无 key 形态字面量」）。
+#: 三段：① 赋值给 token/secret/apikey 之类名字的**非空字符串常量**；
+#: ② `op://` 之后带看起来像秘钥的长串（模板里只该有 `.../credential` 这种字段名）；
+#: ③ Tushare token 的实际形态（40 位十六进制）。
+SECRET_LITERAL_PATTERN = (
+    r"(token|secret|api_?key|passwd|password|credential)\s*[:=]\s*[\"'][^\"'{}$]{16,}[\"']"
+    r"|op://[A-Za-z0-9 _-]+/[A-Za-z0-9 _-]+/[0-9a-f]{16,}"
+    r"|\b[0-9a-f]{40,}\b"
+)
+
+#: 逐处豁免：`相对路径` → 理由。测试目录整体排除（要故意构造被拒的输入）。
+SECRET_LITERAL_EXEMPTIONS: dict[str, str] = {}
+
+
+def test_no_key_shaped_literals_in_packages():
+    """卡「CI 静态守卫」：`packages/` 非测试代码不得出现 key 形态字面量。
+
+    这一条不指望拦住有意提交秘钥的人——它拦的是「顺手把一个真 token 粘进默认值」
+    这类最常见的事故，而那种字面量恰好就是这个形状。
+    """
+    hits = [
+        h for h in _non_test_hits(_grep(SECRET_LITERAL_PATTERN, PACKAGES)) if not _is_comment(h)
+    ]
+    unexplained = [h for h in hits if _relpath(h) not in SECRET_LITERAL_EXEMPTIONS]
+    assert unexplained == [], "出现 key 形态字面量:\n" + "\n".join(unexplained)
+
+
+def test_the_key_shaped_literal_pattern_actually_matches_a_key():
+    """反证：上一条不是空集通过——模式确实能抓到这几种形态。"""
+    import re as _re
+
+    for sample in (
+        'TOKEN = "0123456789abcdef0123456789abcdef01234567"',
+        "api_key: 'sk-live-aaaaaaaaaaaaaaaaaaaaaaaa'",
+        "op://quant-dev/Tushare/0123456789abcdef0123456789abcdef",
+        "0123456789abcdef0123456789abcdef01234567",
+    ):
+        assert _re.search(SECRET_LITERAL_PATTERN, sample), sample
+    # op:// **引用**（字段名，不是值）必须不被误判，否则 tpl 和文档全红。
+    assert not _re.search(SECRET_LITERAL_PATTERN, "op://quant-dev/Tushare/credential")
+
+
+def test_only_tpl_files_carry_op_references_and_they_hold_no_values():
+    """AGENTS.md §3：仓库只跟踪 `*.tpl`（含 `op://` 引用），真实 `.env*` 保持 ignored。"""
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    env_like = [t for t in tracked if re.search(r"(^|/)\.env|\.env\.|env\.tpl$", t)]
+    assert env_like, "没有任何 env 模板——这条测试成了空集通过"
+    for path in env_like:
+        assert path.endswith(".tpl"), f"跟踪了非模板的 env 文件: {path}"
+        text = (REPO / path).read_text(encoding="utf-8")
+        assert "op://" in text, f"{path} 不含 op:// 引用"
+        assert not re.search(SECRET_LITERAL_PATTERN, text), f"{path} 疑似含明文秘钥"
+
+
+def test_tushare_token_template_points_at_the_quant_dev_vault():
+    """卡：凭据只来自 vault `quant-dev`，引用为 `op://quant-dev/Tushare/credential`。"""
+    text = (REPO / "ops" / "tushare.env.tpl").read_text(encoding="utf-8")
+    assert 'TUSHARE_TOKEN="op://quant-dev/Tushare/credential"' in text
+
+
+#: 「把凭据写出去」的形态。`logging.getLogger(__name__).info(...)` 这种**链式**调用曾从
+#: `log(ger)?\.\w+` 下漏过去（变异 ⑦ 存活暴露），所以匹配 `.<任意方法>(` 而不是固定的
+#: logger 变量名；`.getLogger(x).info(` 中间隔着调用，用 `[^\n]*` 跨过去。
+CREDENTIAL_EGRESS_PATTERN = (
+    r"(print|logging\.|log(ger|gers)?\.|\.(debug|info|warning|error|exception|critical)\(|"
+    r"write_text|write_bytes|writelines|\.write\(|open\()"
+    r"[^\n]*\b(token|secret|credential|passwd|password|api_?key)\b"
+)
+
+
+def test_no_module_writes_a_credential_to_disk_or_log():
+    """秘钥不落盘、不进日志：摄取层不得出现「把 token 写出去」的形态。"""
+    hits = [
+        h for h in _non_test_hits(_grep(CREDENTIAL_EGRESS_PATTERN, PACKAGES)) if not _is_comment(h)
+    ]
+    assert hits == [], "疑似把凭据写进日志/文件:\n" + "\n".join(hits)
+
+
+def test_credential_egress_pattern_catches_the_shapes_it_claims_to(tmp_path):
+    """反证：守卫必须真的认得这些写法，否则上一条永远是绿的。
+
+    每一条都是变异验证里实际用过、或差点漏过的形态。
+    """
+    probe = tmp_path / "probe.py"
+    must_catch = [
+        'logging.getLogger(__name__).info("token=%s", token)',
+        'logger.debug(f"{secret}")',
+        "print(token)",
+        'pathlib.Path("k").write_text(token)',
+        'open("k", "w").write(credential)',
+        'log.warning("api_key " + api_key)',
+    ]
+    for line in must_catch:
+        probe.write_text(line + "\n", encoding="utf-8")
+        assert _grep(CREDENTIAL_EGRESS_PATTERN, tmp_path), f"守卫漏掉: {line}"
+    probe.write_text('logger.info("batch %s rows written", n)\n', encoding="utf-8")
+    assert not _grep(CREDENTIAL_EGRESS_PATTERN, tmp_path), "无关日志不该被误报"
+
+
+def test_reveal_is_called_in_exactly_one_place():
+    """`SecretValue.reveal()` 是明文的唯一出口——调用点多一个，掩码就少一层保障。
+
+    唯一允许的调用点是 `CredentialedTransport._body`：明文只在拼 POST body 的那一行离开
+    包装。洗异常文本的 `redact()` 看起来也需要明文，但它走 `SecretValue.scrub()`——在类内
+    直接读 `_value`，不占这个额度。否则「唯一出口」会永远是 2 处，守卫就再也发现不了
+    第 3 处。定义本身不算调用。
+    """
+    hits = _non_test_hits(_grep(r"\.reveal\(\)", PACKAGES))
+    files = {_relpath(h) for h in hits}
+    assert files <= {"data/quantime_data/transport.py"}, f"reveal() 泄漏到: {sorted(files)}"
+    in_transport = [h for h in hits if "transport.py" in h]
+    assert len(in_transport) == 1, (
+        f"transport.py 里有 {len(in_transport)} 处 reveal()，期望 1 处:\n" + "\n".join(in_transport)
+    )
+
+
+def test_credentialed_api_name_whitelist_holds_no_account_endpoint():
+    """`api_name` 白名单是放行清单——账户/资金/交易类名字一个都不能在里面。"""
+    from quantime_data.transport import TUSHARE_READONLY_API_NAMES
+
+    banned = re.compile(r"order|account|balance|withdraw|capital|asset|user|position|fund_")
+    bad = [n for n in TUSHARE_READONLY_API_NAMES if banned.search(n)]
+    assert bad == [], f"只读白名单里出现账户/交易类 api_name: {bad}"
+
+
+def test_tushare_fixtures_are_declared_synthetic():
+    """AGENTS.md §2：`fixtures/` 只放合成数据；阶段 1 的 Tushare fixture 是手写合成。"""
+    import json
+
+    manifest = json.loads(
+        (REPO / "fixtures" / "tushare_pro" / "MANIFEST.json").read_text(encoding="utf-8")
+    )
+    assert manifest["synthetic"] is True
+    assert "tushare_pro" not in NON_SYNTHETIC_FIXTURE_DIRS, (
+        "阶段 1 的 fixture 是合成的；阶段 2 换成脱敏录制时才在这里登记豁免"
+    )
+
+
+CI_SECRET_GUARD_STEP = "Credential guards (QNT-48：无 key 形态字面量 / 只跟踪 *.tpl)"
+
+
+def test_ci_credential_guard_step_passes_as_shipped():
+    """直接跑 ci.yml 里那段脚本，必须退出 0。"""
+    proc = _run(_ci_step_script(CI_SECRET_GUARD_STEP))
+    assert proc.returncode == 0, f"ci.yml 凭据守卫步骤失败:\n{proc.stdout}\n{proc.stderr}"
+
+
+def test_ci_credential_guard_fails_when_a_key_literal_is_planted():
+    """变异：往 packages/ 里种一个 key 形态字面量，CI 那段必须打红。
+
+    只在测试进程里造文件、用完即删——不留在工作区。
+    """
+    planted = PACKAGES / "data" / "quantime_data" / "_planted_secret_probe.py"
+    planted.write_text('TOKEN = "0123456789abcdef0123456789abcdef01234567"\n', encoding="utf-8")
+    try:
+        proc = _run(_ci_step_script(CI_SECRET_GUARD_STEP))
+    finally:
+        planted.unlink()
+    assert proc.returncode != 0, f"种了明文 key 却没能打红:\n{proc.stdout}"
+
+
+def test_ci_credential_guard_fails_when_a_real_env_file_is_staged():
+    """变异：跟踪一个非 .tpl 的 env 文件，CI 那段必须打红。"""
+    script = _ci_step_script(CI_SECRET_GUARD_STEP)
+    probe = REPO / ".env.probe"
+    probe.write_text("TUSHARE_TOKEN=plain\n", encoding="utf-8")
+    try:
+        subprocess.run(["git", "add", "-f", str(probe)], cwd=REPO, check=True, capture_output=True)
+        proc = _run(script)
+    finally:
+        subprocess.run(
+            ["git", "rm", "-q", "--cached", "--force", str(probe)], cwd=REPO, capture_output=True
+        )
+        probe.unlink()
+    assert proc.returncode != 0, f"跟踪了明文 env 却没能打红:\n{proc.stdout}"
+
+
+def test_ci_credential_guard_scope_is_not_weakened():
+    script = _ci_step_script(CI_SECRET_GUARD_STEP)
+    runnable = "\n".join(ln for ln in script.splitlines() if not ln.lstrip().startswith("#"))
+    assert "packages/" in runnable and "grep -v '/tests/'" in runnable, "grep 范围被缩小"
+    assert "git ls-files" in runnable, "缺少「只跟踪 *.tpl」这一段"
+    assert "reveal()" in runnable, "缺少 reveal() 唯一出口守卫"

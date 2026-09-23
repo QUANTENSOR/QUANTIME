@@ -16,13 +16,26 @@ from quantime_core.allowlist import (
 )
 
 
-def test_allowlist_first_version_is_binance_vision_public_readonly():
+def test_allowlist_contents_are_pinned_per_host_class():
+    """逐条钉住：表里每个 host 属于哪一类是**明示**的，新增条目必须来改这里。
+
+    原断言「全表都是 public_readonly」在 QNT-48 加入需 token 的只读源后不再成立；
+    但放宽成「只数条数」会让一个悄悄加进来的交易 host 也照样通过，所以改成逐类列举。
+    """
     hosts = {e.host: e for e in ALLOWLIST}
-    assert hosts.keys() == {"data.binance.vision", "data-api.binance.vision"}
+    assert hosts.keys() == {"data.binance.vision", "data-api.binance.vision", "api.tushare.pro"}
+
+    public = {h for h, e in hosts.items() if e.public_readonly}
+    credentialed = {h for h, e in hosts.items() if e.credentialed_readonly}
+    trading = {h for h, e in hosts.items() if not e.public_readonly and not e.credentialed_readonly}
+    assert public == {"data.binance.vision", "data-api.binance.vision"}
+    assert credentialed == {"api.tushare.pro"}
+    assert trading == set(), f"表里出现未经 ADR-0001 D1.7 审的交易 host: {sorted(trading)}"
+
     for entry in ALLOWLIST:
-        assert entry.public_readonly is True
-        assert entry.exchange == "binance"
         assert entry.doc_url.startswith("https://")
+    for host in public:
+        assert hosts[host].exchange == "binance"
 
 
 def test_assert_trading_host_rejects_public_readonly_entry():

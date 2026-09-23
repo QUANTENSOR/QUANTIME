@@ -1,0 +1,47 @@
+{
+  "code": 0,
+  "data": {
+    "fields": [
+      "ts_code",
+      "symbol",
+      "name",
+      "area",
+      "industry",
+      "market",
+      "exchange",
+      "curr_type",
+      "list_status",
+      "list_date",
+      "delist_date"
+    ],
+    "items": [
+      [
+        "000001.SZ",
+        "000001",
+        "平安银行",
+        "深圳",
+        "银行",
+        "主板",
+        "SZSE",
+        "CNY",
+        "L",
+        "19910403",
+        null
+      ],
+      [
+        "600000.SH",
+        "600000",
+        "浦发银行",
+        "上海",
+        "银行",
+        "主板",
+        "SSE",
+        "CNY",
+        "L",
+        "19991110",
+        null
+      ]
+    ]
+  },
+  "msg": null
+}

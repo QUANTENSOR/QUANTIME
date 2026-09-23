@@ -85,6 +85,43 @@ jobs:
 
           exit "$fail"
 
+      - name: Credential guards (QNT-48：无 key 形态字面量 / 只跟踪 *.tpl)
+        run: |
+          # 与上面的静态守卫同样用显式计数记账：`! grep` 不受 `set -e` 约束，
+          # 一串取反命令只有最后一条的退出码算数（QNT-28 变异验证暴露过）。
+          fail=0
+
+          # ① key 形态字面量。三段：赋给 token/secret/api_key 的非空长字符串常量；
+          #    `op://` 引用里带看起来像秘钥的长串（模板里只该有 `/credential` 这种字段名）；
+          #    40 位以上十六进制（Tushare token 的实际形态）。
+          echo "--- 无 key 形态字面量 ---"
+          hits=$(grep -rEn --include='*.py' \
+                 '(token|secret|api_?key|passwd|password|credential)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"'{}$]{16,}["'"'"']|op://[A-Za-z0-9 _-]+/[A-Za-z0-9 _-]+/[0-9a-f]{16,}|\b[0-9a-f]{40,}\b' \
+                 packages/ | grep -v '/tests/' | grep -vP '^[^:]+:\d+:\s*#' || true)
+          if [ -n "$hits" ]; then printf '%s\n' "$hits"; fail=1; fi
+
+          # ② 只跟踪 *.tpl：任何被 git 跟踪的 env 文件都必须是模板（AGENTS.md §3）。
+          echo "--- env 文件只跟踪 *.tpl ---"
+          envs=$(git ls-files | grep -E '(^|/)\.env|\.env\.|env\.tpl$' | grep -v '\.tpl$' || true)
+          if [ -n "$envs" ]; then printf '%s\n' "$envs"; fail=1; fi
+
+          # ③ 明文出口唯一：`SecretValue.reveal()` 只许在 transport.py 里出现一次。
+          #    多一处调用就多一条能把 token 拼进日志的路径。
+          echo "--- reveal() 唯一出口 ---"
+          reveals=$(grep -rEn --include='*.py' '\.reveal\(\)' packages/ | grep -v '/tests/' || true)
+          outside=$(printf '%s' "$reveals" | grep -v 'quantime_data/transport\.py' || true)
+          count=$(printf '%s' "$reveals" | grep -c . || true)
+          if [ -n "$outside" ] || [ "$count" != "1" ]; then
+            echo "reveal() 出现 $count 处（期望 1 处，且只在 transport.py）:"
+            printf '%s\n' "$reveals"
+            fail=1
+          fi
+
+          exit "$fail"
+
+      - name: Tushare synthetic fixtures match their generator (QNT-48)
+        run: uv run --package quantime-data python fixtures/tushare_pro/synth_gen.py --check
+
       - name: Bench input reproducibility (ADR-0003 §5.1)
         run: uv run python fixtures/bench/bench_gen.py --check-expected
 

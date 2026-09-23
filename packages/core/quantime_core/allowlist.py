@@ -5,7 +5,9 @@
 回写由 QNT-39 单独 PR 完成（owner 5A 裁决：与 ADR「同一 PR」表述的偏离已建卡）。
 
 字段名沿用 rules 原文 `public_readonly=true/false`，不引入 `kind` 枚举（§3.3）。
-`public_readonly=False` 的条目即 ADR-0001 D1.7 交易 host 集合。
+`public_readonly=False` **且** `credentialed_readonly=False` 的条目才是 ADR-0001 D1.7 交易
+host 集合；`credentialed_readonly=True` 是 QNT-48 加的第三类——需 token 的只读数据源
+（Tushare Pro），三个 `assert_*_host` 互不放行。
 
 本文件是 host 字面量的**唯一**出处，因此其余模块不得复制 host 字符串，而应引用这里的
 具名条目（如 `BINANCE_VISION_ARCHIVE.host`）。这既让静态守卫 grep 保持有效，
@@ -41,13 +43,29 @@ class DemoMarker:
 
 @dataclass(frozen=True, slots=True)
 class HostEntry:
-    """allowlist 条目。`doc_url` 是 crypto-boundaries ① 要求的官方文档链接。"""
+    """allowlist 条目。`doc_url` 是 crypto-boundaries ① 要求的官方文档链接。
+
+    `credentialed_readonly=True` 标出**第三类** host：需要凭据、但只提供只读行情/参考数据，
+    既不是 `public_readonly=True` 的无 key 公共源，也不属于 ADR-0001 D1.7 的交易 host 集合
+    （QNT-48 / Tushare Pro）。原字段只有 `public_readonly` 一个布尔，`False` 等同「交易 host」；
+    若照此把需 key 的数据源登记成 `public_readonly=False`，`assert_trading_host` 就会把它
+    当成合法下单出口——所以这一维是**独立**的，且 `assert_trading_host` 显式拒绝它。
+    `exchange` 对数据源读作「数据源标识」（Tushare 不是交易所）。
+    """
 
     host: str
     public_readonly: bool
     exchange: str
     doc_url: str
     demo_marker: DemoMarker | None = None
+    credentialed_readonly: bool = False
+
+    def __post_init__(self) -> None:
+        if self.public_readonly and self.credentialed_readonly:
+            raise ValueError(
+                f"{self.host}: public_readonly 与 credentialed_readonly 互斥"
+                "（无 key 的公共源不需要凭据）"
+            )
 
 
 # 第一版只含公共只读归档/镜像 host（ADR-0003 §7、§9.5）。刻意不收 api.binance.com /
@@ -70,9 +88,22 @@ BINANCE_VISION_SPOT_MIRROR = HostEntry(
     doc_url="https://developers.binance.com/docs/binance-spot-api-docs/faqs/market_data_only",
 )
 
+#: Tushare Pro HTTP API（QNT-48）——A 股日线 / 复权因子 / 每日指标 / 交易日历 / 股票列表。
+#: 需 token（POST body，`op://quant-dev/Tushare/credential` 注入），故 `public_readonly=False`；
+#: 但它只提供只读数据、无任何下单/账户/资金端点，所以 `credentialed_readonly=True`，
+#: `assert_trading_host` 对它 fail-closed。
+TUSHARE_PRO_API = HostEntry(
+    host="api.tushare.pro",
+    public_readonly=False,
+    exchange="tushare",
+    doc_url="https://tushare.pro/document/1?doc_id=130",
+    credentialed_readonly=True,
+)
+
 ALLOWLIST: tuple[HostEntry, ...] = (
     BINANCE_VISION_ARCHIVE,
     BINANCE_VISION_SPOT_MIRROR,
+    TUSHARE_PRO_API,
 )
 
 _BY_HOST: dict[str, HostEntry] = {entry.host: entry for entry in ALLOWLIST}
@@ -111,6 +142,30 @@ def assert_trading_host(host: str) -> HostEntry:
     if entry.public_readonly:
         raise TradingBoundaryError(
             f"host {host!r} 是公共只读 host（public_readonly=True），不得用于交易/账户/资金请求"
+        )
+    if entry.credentialed_readonly:
+        raise TradingBoundaryError(
+            f"host {host!r} 是需凭据的**只读数据源**（credentialed_readonly=True），"
+            "不得用于交易/账户/资金请求"
+        )
+    return entry
+
+
+def assert_credentialed_readonly_host(host: str) -> HostEntry:
+    """只放行 `credentialed_readonly=True` 条目（需 token 的只读数据源，QNT-48）。
+
+    与另外两个断言同样**互不放行**：公共只读 host 与交易 host 传进来都必须失败，
+    否则「带凭据的出口」就能被复用去打无 key 源或下单 host。
+    """
+    entry = _BY_HOST.get(host)
+    if entry is None:
+        raise HostNotAllowedError(
+            f"host 不在 allowlist: {host!r}（新增 host 须先走 crypto-boundaries ①）"
+        )
+    if not entry.credentialed_readonly:
+        raise HostNotAllowedError(
+            f"host {host!r} 不是需凭据的只读数据源（credentialed_readonly=False），"
+            "不得用于带 token 的数据请求"
         )
     return entry
 

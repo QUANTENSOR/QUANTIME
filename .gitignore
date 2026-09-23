@@ -27,3 +27,4 @@ __pycache__/
 # Bench fixtures are generated, never committed (ADR-0003 §5.1)
 fixtures/bench/*.parquet
 fixtures/bench/*.zip
+commitmsg.txt
