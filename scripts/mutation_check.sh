@@ -36,6 +36,30 @@ PY
   clean
 }
 
+# still_green <标签> <文件> <python 替换表达式> <pytest 选择器>：同一变异下这些测试必须**仍绿**
+# （证明上面变红的是被改坏的那一处，而不是测试本身对合法输入就不稳）。
+still_green() {
+  local label="$1" file="$2" expr="$3" target="$4"
+  cp "$file" "$file.mutbak"
+  python3 - "$file" "$expr" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); old, new = sys.argv[2].split("=>>", 1)
+s = p.read_text()
+assert old in s, f"变异锚点未找到: {old!r} in {p}"
+p.write_text(s.replace(old, new, 1))
+PY
+  clean
+  if uv run pytest "$target" -q >/dev/null 2>&1; then
+    echo "  ok    $label —— 变异下合法值测试仍绿"
+    PASS=$((PASS+1))
+  else
+    echo "  FAIL  $label —— 变异下合法值测试也红了（测试不针对被改的那一处）"
+    FAIL=$((FAIL+1))
+  fi
+  mv "$file.mutbak" "$file"
+  clean
+}
+
 CORE=packages/core/quantime_core
 DATA=packages/data/quantime_data
 
@@ -247,12 +271,12 @@ mutate "R1-2c 百分号编码一律拒绝" "$DATA/transport.py" \
   packages/data/tests/test_transport.py::test_normalization_bypasses_are_rejected_before_any_request
 
 # R1-3：不按请求区间裁剪——`start=end=2026-08-15` 重新提交整月 31 行。
-mutate "R1-3 按请求区间裁剪落盘的行" "$DATA/ingest.py" \
+mutate "R1-3 按请求区间裁剪落盘的行" "$DATA/spec.py" \
   'keep = [i for i, t in enumerate(times) if start <= t < end]=>>keep = list(range(len(times)))' \
   packages/data/tests/test_ingest.py::test_only_rows_inside_the_requested_window_are_committed
 
 # R1-3b：窗口右端点算错一天——末日整根日线被裁掉（半开窗口的经典 off-by-one）。
-mutate "R1-3b 窗口右端点含 end 当天" "$DATA/ingest.py" \
+mutate "R1-3b 窗口右端点含 end 当天" "$DATA/spec.py" \
   'end = dt.datetime.combine(spec.end + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC)=>>end = dt.datetime.combine(spec.end, dt.time.min, tzinfo=dt.UTC)' \
   packages/data/tests/test_ingest.py::test_clip_to_window_is_a_pure_half_open_utc_window
 
@@ -277,7 +301,7 @@ mutate "R1-5 record.py 用法命令可用" fixtures/binance_public/record.py \
   tests/test_static_guards.py::test_record_script_documents_a_runnable_command
 
 # Q28-4：跳过 .CHECKSUM 核对——被篡改/截断的上游字节会被当成好数据入湖。
-mutate "Q28-4 上游 .CHECKSUM 核对" "$DATA/ingest.py" \
+mutate "Q28-4 上游 .CHECKSUM 核对" "$DATA/sources/binance_public.py" \
   'if verify_checksum:=>>if False:' \
   packages/data/tests/test_ingest.py::test_checksum_mismatch_refuses_to_write_anything
 
@@ -311,6 +335,181 @@ mutate "factor-library: 美股 yes 须标待付费源" scripts/factor_library.py
   tests/test_factor_library.py::test_validate_rejects_us_yes_without_paid_flag
 
 echo
+# ---- QNT-45 卡描述的四个变异点 ----
+mutate "Q45-a 重试之间必须退避" "$DATA/retry.py" \
+  '            sleep(wait)=>>            pass' \
+  packages/data/tests/test_retry.py::test_every_retry_is_preceded_by_an_exponential_wait
+
+mutate "Q45-b 增量只取水位线之后（改成全量重取）" "$DATA/incremental.py" \
+  'return spec.with_window(start, spec.end)=>>return spec' \
+  packages/data/tests/test_incremental.py::test_the_next_window_starts_the_day_after_the_watermark
+
+# R3：退回「起点 = max(水位线次日, --start)」——unit 若传 `--start yesterday`，停机期间的日子
+#   永远取不回来（verify-a R3 的反例）。
+mutate "Q45-b2 有水位线时 --start 被忽略（R3）" "$DATA/incremental.py" \
+  'return spec.with_window(start, spec.end)=>>return spec.with_window(max(start, spec.start), spec.end)' \
+  packages/data/tests/test_recovery.py::test_since_last_resumes_from_the_watermark_not_from_start
+
+mutate "Q45-c 补采写新 rerun batch（改成 ingest、丢 rerun_of）" "$DATA/daily.py" \
+  'kind=task.kind,
+            rerun_of=task.rerun_of,=>>kind="ingest",
+            rerun_of=None,' \
+  packages/data/tests/test_daily.py::test_backfill_writes_a_new_rerun_batch_and_never_touches_the_original
+
+# R6：补采时改写被补 batch 的已发布字节（往原 part 末尾追加）——kind/rerun_of 都对，
+#   只有「一个字节不动」那条断言能抓到它。
+mutate "Q45-c2 补采不得改写原 batch 的字节（R6）" "$DATA/daily.py" \
+  'out.increments.append(plan.describe())=>>out.increments.append(plan.describe())
+    for _t in plan.tasks:
+        if _t.rerun_of:
+            _m = __import__("json").loads((root / "data/meta/batch_manifest" / f"{_t.rerun_of}.json").read_text())
+            with open(root / _m["parts"][0]["path"], "ab") as _fh:
+                _fh.write(b"\\0")' \
+  packages/data/tests/test_daily.py::test_backfill_writes_a_new_rerun_batch_and_never_touches_the_original
+
+# ---- QNT-45 返修 R1–R5：每项各钉一个变异点 ----
+
+# R1：出口不再包装 httpx 异常——ConnectError 越过出口，外层不认得它，整次运行崩成 traceback。
+mutate "Q45-R1a httpx 异常在出口包成 OSError" "$DATA/cli.py" \
+  'raise TransportIOError(f"网络层故障（{type(exc).__name__}）: {url}: {exc}") from exc=>>raise' \
+  packages/data/tests/test_exit_boundary.py::test_a_network_failure_is_retried_up_to_the_cap_then_fails_the_run
+
+# R1：明确拒绝（403 类）退回「当限流重试」——被 ban 的请求被白白重打 N 次。
+mutate "Q45-R1b 其余 4xx 不重试" "$DATA/transport.py" \
+  'return status in RETRYABLE_STATUS or 500 <= status <= 599=>>return status != 404' \
+  packages/data/tests/test_exit_boundary.py::test_a_definitive_refusal_is_one_request_no_backoff_and_a_failed_run
+
+# R2：不看发布节奏，月档永远算已发布——9 月下旬请求 `2026-09.zip`。
+mutate "Q45-R2 只列已发布的月档" "$DATA/sources/binance_public.py" \
+  'return as_of >= first_monday(nxt.year, nxt.month)=>>return True' \
+  packages/data/tests/test_publication_cadence.py::test_on_2026_09_22_september_is_listed_as_daily_archives_never_as_the_monthly_zip
+
+# R4a：失败序列不拉低覆盖——一成功一失败的运行重新报 complete。
+mutate "Q45-R4a 有失败序列即非 complete" "$DATA/report.py" \
+  'if any(s.coverage == COVERAGE_FAILED for s in counted):
+        return COVERAGE_FAILED=>>counted = [s for s in counted if s.coverage != COVERAGE_FAILED]
+    if not counted:
+        return COVERAGE_PARTIAL' \
+  packages/data/tests/test_recovery.py::test_a_failed_series_is_in_the_report_and_the_run_is_never_complete
+
+# R4b：失败侧的重试不计入 totals.retries（首个 `retries=outcome.retries,` 在 series_failed 里）。
+mutate "Q45-R4b totals.retries 含失败侧" "$DATA/daily.py" \
+  'retries=outcome.retries,=>>retries=0,' \
+  packages/data/tests/test_recovery.py::test_a_failed_series_is_in_the_report_and_the_run_is_never_complete
+
+# R4c：pending 进了分母——funding 月档未发布的那几天把整份报告拉成 partial。
+mutate "Q45-R4c pending 不进覆盖率分母" "$DATA/report.py" \
+  'return self.status != STATUS_PENDING=>>return True' \
+  packages/data/tests/test_publication_cadence.py::test_a_run_before_the_monthly_release_fetches_daily_archives_and_parks_funding
+
+# R5：失败序列不留缺档——补采计划看不到整条失败的序列。
+mutate "Q45-R5 失败序列的缺档进补采计划" "$DATA/daily.py" \
+  'missing_archives=adapter.list_archives(target),=>>missing_archives=(),' \
+  packages/data/tests/test_recovery.py::test_a_single_day_that_failed_entirely_becomes_one_ingest_task
+
+# ---- R7：首跑 pending 的起点可重放 ----
+
+# R7a：整段 pending 的序列不再把起点写进运行记录——9-08 的请求只剩「昨天」，8 月永远丢了。
+mutate "Q45-R7a pending 起点持久化（删掉 pending_since 记录）" "$DATA/daily.py" \
+  'log.pending_since.append(=>>(lambda _entry: None)(' \
+  packages/data/tests/test_first_run_pending.py::test_a_first_run_pending_start_is_persisted_and_picked_up_after_the_release
+
+# R7b：记了但不用——增量起点不看未消化的 pending 起点。
+mutate "Q45-R7b --since-last 从 min(水位线次日, pending 起点) 起" "$DATA/incremental.py" \
+  'starts = [d for d in pending_since if mark_day is None or d > mark_day]=>>starts = []' \
+  packages/data/tests/test_first_run_pending.py::test_a_first_run_pending_start_is_persisted_and_picked_up_after_the_release
+
+# R7c：水位线越过的 pending 起点没被当成已消化——每天回头重取 8 月。
+mutate "Q45-R7c 水位线越过即消化" "$DATA/incremental.py" \
+  'if mark_day is None or d > mark_day]=>>]' \
+  packages/data/tests/test_first_run_pending.py::test_a_digested_pending_start_is_not_requested_again
+
+# R7d：有未消化 pending 时源级 / 全局 coverage 报成 complete。
+mutate "Q45-R7d 未消化 pending → coverage=pending" "$DATA/report.py" \
+  'return COVERAGE_PENDING=>>return COVERAGE_COMPLETE' \
+  packages/data/tests/test_first_run_pending.py::test_a_first_run_pending_start_is_persisted_and_picked_up_after_the_release
+
+# ---- R8：部署 ----
+
+# R8a：磁盘守卫的比较失效——剩 4 GB 照样开 batch。
+mutate "Q45-R8a 磁盘不足拒开 batch（阈值比较失效）" "$DATA/diskguard.py" \
+  'if free < min_free_bytes:=>>if False:' \
+  packages/data/tests/test_run_guards.py::test_low_disk_refuses_to_start_a_batch_and_reports_failed_with_the_reason
+
+# R8b：被拦下的运行（pull_failed / disk_low）coverage 不再强制 failed。
+mutate "Q45-R8b 被拦下的运行 coverage=failed" "$DATA/report.py" \
+  'if aborted:=>>if False:' \
+  packages/data/tests/test_run_guards.py::test_record_abort_leaves_a_failed_report_and_run_log_without_touching_the_lake
+
+# R8c：`--root …/data` 被当成父目录用——写出 data/data/。
+mutate "Q45-R8c --root 数据目录本身不写出 data/data" "$DATA/cli.py" \
+  'return path.parent=>>return path' \
+  packages/data/tests/test_run_guards.py::test_root_through_a_symlinked_data_dir_writes_into_the_link_target
+
+# R8d：运行前不拉代码。
+mutate "Q45-R8d unit 运行前 git pull --ff-only" "systemd/user/quantime-ingest@.service" \
+  'ExecStartPre=+/usr/bin/git -C /home/workspace/quantime pull --ff-only=>>' \
+  tests/test_systemd_units.py::test_the_ingest_service_pulls_fast_forward_only_before_running
+
+# R8e：ExecStopPost 不看 EXIT_CODE——摄取自己失败也被记成 pull_failed。
+mutate "Q45-R8e pull_failed 只在主进程没跑时记" "systemd/user/quantime-ingest@.service" \
+  '&& [ -z "$${EXIT_CODE:-}" ]=>>' \
+  tests/test_systemd_units.py::test_exec_stop_post_records_pull_failed_only_when_the_main_process_never_ran
+
+# R8f：常驻检出变成可写。
+mutate "Q45-R8f ReadWritePaths 只含数据根" "systemd/user/quantime-ingest@.service" \
+  'ReadWritePaths=/home/workspace/quantime/data=>>ReadWritePaths=/home/workspace/quantime' \
+  tests/test_systemd_units.py::test_the_resident_checkout_is_read_only_and_only_the_data_root_is_writable
+
+# ---- R9：守卫只在共用的「开 batch」边界一处 ----
+
+# R8g：删掉 `ingest_one` 开头那一处守卫调用。ingest / ingest --rerun-of / daily / backfill
+# 逐条分别跑、每一条都必须变红——还绿的那条入口另有一份守卫兜底（或根本没经过这里）。
+R8G_TARGETS=(
+  packages/data/tests/test_run_guards.py::test_ingest_cli_refuses_to_open_a_batch_when_the_disk_is_low
+  packages/data/tests/test_run_guards.py::test_ingest_rerun_of_refuses_to_open_a_batch_when_the_disk_is_low
+  packages/data/tests/test_run_guards.py::test_low_disk_refuses_to_start_a_batch_and_reports_failed_with_the_reason
+  packages/data/tests/test_run_guards.py::test_backfill_goes_through_the_same_guard
+)
+for t in "${R8G_TARGETS[@]}"; do
+  mutate "Q45-R8g 删掉共用边界的守卫 → ${t##*::}" "$DATA/ingest.py" \
+    '    check_disk(root, min_free_bytes)
+=>>' \
+    "$t"
+done
+
+# R8h：`ingest` 不再注册 `--min-free-gb`——参数不再是三个写子命令共用的。
+mutate "Q45-R8h ingest 也接受 --min-free-gb" "$DATA/cli.py" \
+  '            )
+            _add_disk_flag(p)
+=>>            )
+' \
+  packages/data/tests/test_run_guards.py::test_ingest_with_min_free_gb_zero_commits_even_when_the_disk_is_low
+
+# ---- R10：阈值解析 ----
+
+# Q45-R10：解析函数退回「`value > 0 else None`」——负数 / NaN / inf 被静默当成关闭守卫。
+# 非法值测试（三个写子命令 × 参数 / 环境变量）逐条变红；合法值测试保持绿。
+R10_EXPR='    if not math.isfinite(value) or value < 0:
+        raise=>>    if False:
+        raise'
+G=packages/data/tests/test_run_guards.py
+for cmd in ingest daily backfill; do
+  for bad in -1 nan inf; do
+    mutate "Q45-R10 阈值不校验 → flag[$cmd $bad]" "$DATA/diskguard.py" "$R10_EXPR" \
+      "$G::test_an_invalid_min_free_gb_flag_refuses_to_start[$cmd-$bad]"
+    mutate "Q45-R10 阈值不校验 → env[$cmd $bad]" "$DATA/diskguard.py" "$R10_EXPR" \
+      "$G::test_an_invalid_min_free_gb_env_refuses_to_start[$cmd-$bad]"
+  done
+done
+still_green "Q45-R10 阈值不校验 → 合法值 0 / 0.5 / 2 / 缺省 5" "$DATA/diskguard.py" "$R10_EXPR" \
+  "$G::test_valid_thresholds_behave_as_before"
+
+mutate "Q45-d unit 文件注入主网 host 字面量" "systemd/user/quantime-ingest@.service" \
+  '[Service]=>>[Service]
+Environment=QUANTIME_UPSTREAM=https://api.binance.com' \
+  tests/test_systemd_units.py::test_no_mainnet_or_trading_host_literals_in_unit_files
+
 echo "== fresh 重跑（还原后全量）=="
 clean
 if uv run pytest -q 2>&1 | tail -3; then

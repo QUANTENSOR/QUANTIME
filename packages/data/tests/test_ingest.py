@@ -10,6 +10,7 @@ import datetime as dt
 import hashlib
 from pathlib import Path
 
+import fixture_source
 import pyarrow as pa
 import pytest
 from quantime_core import parquet_io
@@ -18,45 +19,13 @@ from quantime_core.paths import PROVENANCE_COLUMNS, AssetClass, DataType, Freq
 from quantime_data import audit, batches, ingest
 from quantime_data.sources import binance_public as bp
 
-FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "binance_public"
-
-#: 上游 URL → 录制文件名。摄取时 `fetch` 按这张表回放，永不出网。
-RECORDED: dict[str, str] = {
-    bp.kline_url("spot", "BTCUSDT", "1d", "2026-08"): "spot-BTCUSDT-1d-2026-08.zip",
-    bp.kline_url("perp", "BTCUSDT", "4h", "2026-08"): "um-BTCUSDT-4h-2026-08.zip",
-    bp.funding_url("BTCUSDT", "2026-08"): "um-BTCUSDT-fundingRate-2026-08.zip",
-    bp.metrics_url("BTCUSDT", dt.date(2026, 9, 15)): "um-BTCUSDT-metrics-2026-09-15.zip",
-}
-
-NOW = dt.datetime(2026, 9, 21, 12, 0, tzinfo=dt.UTC)
-
-
-def _snapshot(root: Path) -> dict[str, str]:
-    """湖里每个文件的相对路径 → sha256，用于断言「一个字节都没动」。"""
-    return {
-        p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted((root / "data").rglob("*"))
-        if p.is_file()
-    }
-
-
-class FixtureFetcher:
-    """离线 fetch：录制里有就回放，没有就当上游 404（缺档）。"""
-
-    def __init__(self) -> None:
-        self.urls: list[str] = []
-
-    def __call__(self, url: str) -> bytes:
-        self.urls.append(url)
-        if url.endswith(".CHECKSUM"):
-            name = RECORDED.get(url.removesuffix(".CHECKSUM"))
-            if name is None:
-                raise FileNotFoundError(url)
-            return (FIXTURES / (name + ".CHECKSUM")).read_bytes()
-        name = RECORDED.get(url)
-        if name is None:
-            raise FileNotFoundError(url)
-        return (FIXTURES / name).read_bytes()
+#: 录制回放表、离线 fetch 与共用 spec 都在 `fixture_source`——QNT-45 的通用层测试
+#: 与本文件共用同一份录制（两份回放表会让其中一份悄悄失去覆盖）。
+_snapshot = fixture_source.snapshot
+FIXTURES = fixture_source.FIXTURES
+RECORDED = fixture_source.RECORDED
+NOW = fixture_source.NOW
+FixtureFetcher = fixture_source.FixtureFetcher
 
 
 @pytest.fixture

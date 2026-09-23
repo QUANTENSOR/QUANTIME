@@ -8,9 +8,21 @@
 
 | datatype | 上游前缀 | 周期 | 说明 |
 |---|---|---|---|
-| `kline` | `data/{spot,futures/um}/monthly/klines/<SYM>/<freq>/` | `1h`/`4h`/`1d` | 12 列 |
+| `kline` | `data/{spot,futures/um}/{monthly,daily}/klines/<SYM>/<freq>/` | `1h`/`4h`/`1d` | 12 列 |
 | `funding` | `data/futures/um/monthly/fundingRate/<SYM>/` | `event` | 3 列，8h 一条 |
 | `open_interest` | `data/futures/um/daily/metrics/<SYM>/` | `5m` | metrics 8 列，取 OI 两列 |
+
+**按发布节奏选归档**（QNT-45 R2；调研文档 §4.5「日文件次日；月文件每月第一个周一」）：
+`list_archives` 只列**截至 `spec.as_of` 已发布**的归档——
+
+* K 线：整月已结束且月档已发布（请求日 ≥ 次月第一个周一）→ 用月档；其余日子用日档
+  （日档次日发布，即 `day < as_of`）。同一天只会被一个归档覆盖，月档与日档不重叠。
+* funding：Vision **没有日度 fundingRate 归档**（2026-09-23 对
+  `data/futures/um/daily/fundingRate/BTCUSDT/BTCUSDT-fundingRate-2026-09-15.zip` 实测 404），
+  只能等月档。月档发布之前的日子不列归档，交给 `pending_windows` 记成 `pending_upstream`。
+* OI（metrics）：只有日档，次日发布。
+
+`as_of=None`（历史请求）视全部月档已发布，行为与 QNT-28 相同。
 
 **OI 的窗口**：REST `/futures/data/openInterestHist` 官方只留最近 1 个月，
 但 Vision 的 `metrics` 日归档没有这个限制——按日文件可取更早的历史。本模块走 Vision，
@@ -24,13 +36,27 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import hashlib
 import io
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 import pyarrow as pa
 from quantime_core.allowlist import BINANCE_VISION_ARCHIVE, BINANCE_VISION_SPOT_MIRROR
-from quantime_core.paths import AssetClass, DataType, Freq
+from quantime_core.paths import AssetClass, DataType, Freq, Market
+
+from ..adapter import Archive, NormalizedTable
+from ..spec import (
+    FetchedFile,
+    Fetcher,
+    IngestError,
+    IngestSpec,
+    clip_to_window,
+    days_between,
+    first_monday,
+    month_bounds,
+    months_between,
+)
 
 #: 本源使用的 host —— 从 allowlist **引用**而非复制字面量（`core/allowlist.py` 是唯一出处，
 #: 静态守卫据此 grep）。Binance 主 host 不在此列：美国节点 451，ADR-0003 §9.5 明确不使用。
@@ -76,6 +102,20 @@ def kline_url(asset_class: AssetClass | str, symbol: str, freq: Freq | str, mont
     market = _um_or_spot(asset_class)
     return (
         f"{ARCHIVE_BASE}/data/{market}/monthly/klines/{symbol}/{freq}/{symbol}-{freq}-{month}.zip"
+    )
+
+
+def kline_daily_url(
+    asset_class: AssetClass | str, symbol: str, freq: Freq | str, day: dt.date
+) -> str:
+    """日度 K 线 zip 的 URL（次日发布；月档发布前的日子用它）。"""
+    freq = Freq(freq)
+    if str(freq) not in SUPPORTED_KLINE_FREQS:
+        raise ValueError(f"本卡范围只含 {sorted(SUPPORTED_KLINE_FREQS)}，得到 {freq}")
+    market = _um_or_spot(asset_class)
+    return (
+        f"{ARCHIVE_BASE}/data/{market}/daily/klines/{symbol}/{freq}/"
+        f"{symbol}-{freq}-{day.isoformat()}.zip"
     )
 
 
@@ -279,3 +319,175 @@ FREQ_STEP: dict[str, dt.timedelta] = {
     "4h": dt.timedelta(hours=4),
     "1d": dt.timedelta(days=1),
 }
+
+
+# ---- QNT-45：`adapter.SourceAdapter` 实现 —— Binance Vision 是第一个 adapter ----
+
+
+def monthly_published(month: str, as_of: dt.date | None) -> bool:
+    """月档 `month` 截至 `as_of` 是否已发布：次月第一个周一发布（调研 §4.5）。
+
+    次月第一个周一必然晚于本月最后一天，所以「已发布」蕴含「整月已结束」。
+    """
+    if as_of is None:
+        return True
+    _, last = month_bounds(month)
+    nxt = last + dt.timedelta(days=1)
+    return as_of >= first_monday(nxt.year, nxt.month)
+
+
+def daily_published(day: dt.date, as_of: dt.date | None) -> bool:
+    """日档 `day` 截至 `as_of` 是否已发布：次日发布。"""
+    return as_of is None or day < as_of
+
+
+def _archive(url: str, first: dt.date, last: dt.date) -> Archive:
+    return Archive(url=url, filename=url.rsplit("/", 1)[-1], covers_start=first, covers_end=last)
+
+
+def _kline_archives(spec: IngestSpec) -> tuple[Archive, ...]:
+    """月档已发布的月份用月档，其余日子用已发布的日档——同一天不会被两个归档覆盖。"""
+    out: list[Archive] = []
+    for month in months_between(spec.start, spec.end):
+        first, last = month_bounds(month)
+        if monthly_published(month, spec.as_of):
+            out.append(
+                _archive(kline_url(spec.asset_class, spec.symbol, spec.freq, month), *(first, last))
+            )
+            continue
+        for day in days_between(max(first, spec.start), min(last, spec.end)):
+            if daily_published(day, spec.as_of):
+                url = kline_daily_url(spec.asset_class, spec.symbol, spec.freq, day)
+                out.append(_archive(url, day, day))
+    return tuple(out)
+
+
+def _funding_archives(spec: IngestSpec) -> tuple[Archive, ...]:
+    """只有月档（无日度 fundingRate）：未发布的月份不列，由 `pending_windows` 记账。"""
+    _assert_perp(spec, "funding")
+    out: list[Archive] = []
+    for month in months_between(spec.start, spec.end):
+        if monthly_published(month, spec.as_of):
+            out.append(_archive(funding_url(spec.symbol, month), *month_bounds(month)))
+    return tuple(out)
+
+
+def _open_interest_archives(spec: IngestSpec) -> tuple[Archive, ...]:
+    _assert_perp(spec, "open_interest")
+    return tuple(
+        _archive(metrics_url(spec.symbol, day), day, day)
+        for day in days_between(spec.start, spec.end)
+        if daily_published(day, spec.as_of)
+    )
+
+
+def _assert_perp(spec: IngestSpec, what: str) -> None:
+    if AssetClass(spec.asset_class) is not AssetClass.PERP:
+        raise IngestError(f"{what} 只存在于 USDT 永续（perp），得到 {spec.asset_class}")
+
+
+#: `datatype → (列归档, 归一化函数, schema)`。三类各一行，新增 datatype 只加一行。
+_BY_DATATYPE = {
+    DataType.KLINE: (_kline_archives, normalize_klines, KLINE_SCHEMA),
+    DataType.FUNDING: (_funding_archives, normalize_funding, FUNDING_SCHEMA),
+    DataType.OPEN_INTEREST: (
+        _open_interest_archives,
+        normalize_open_interest,
+        OPEN_INTEREST_SCHEMA,
+    ),
+}
+
+
+class BinanceVisionAdapter:
+    """Binance 公开归档适配器（`adapter.SourceAdapter` 的第一个实现）。
+
+    只做契约的三件事。增量水位、重试退避、补采、核查、报告、timer 一概不在这里——
+    那些在通用层，换成 Massive 或 Tushare 时一行都不用重写。
+    """
+
+    name = SOURCE
+    version = SOURCE_VERSION
+    market = Market.CRYPTO
+
+    def list_archives(self, spec: IngestSpec) -> tuple[Archive, ...]:
+        """区间内上游**应当**存在的归档，纯函数、顺序确定、不出网。"""
+        try:
+            plan, _, _ = _BY_DATATYPE[DataType(spec.datatype)]
+        except KeyError:
+            raise IngestError(
+                f"本源只覆盖 kline / funding / open_interest，得到 {spec.datatype}"
+            ) from None
+        return plan(spec)
+
+    def pending_windows(self, spec: IngestSpec) -> tuple[tuple[dt.date, dt.date], ...]:
+        """请求区间里**尚未发布**的日期段：不被任何已列归档覆盖的日子，按连续段合并。
+
+        `list_archives` 已把已发布的全列出来（哪怕它们之后 404），所以它的补集恰好就是
+        「按发布节奏还没到」的那部分——不另写一套日历，两处口径不会分叉。
+        """
+        covered: set[dt.date] = set()
+        for archive in self.list_archives(spec):
+            covered.update(days_between(archive.covers_start, archive.covers_end))
+        out: list[tuple[dt.date, dt.date]] = []
+        for day in days_between(spec.start, spec.end):
+            if day in covered:
+                continue
+            if out and out[-1][1] == day - dt.timedelta(days=1):
+                out[-1] = (out[-1][0], day)
+            else:
+                out.append((day, day))
+        return tuple(out)
+
+    def fetch_archive(
+        self, archive: Archive, fetch: Fetcher, *, verify_checksum: bool = True
+    ) -> FetchedFile:
+        """取一个归档并核对上游 `.CHECKSUM`。
+
+        上游没有这个归档 → `FileNotFoundError` 原样上抛（通用层记成覆盖不全，不算失败）。
+        `.CHECKSUM` **本身**缺失只记为不可核对——它是旁路文件，不是数据；
+        核对不过则 `IngestError`：可疑字节一个不进湖。
+        """
+        payload = fetch(archive.url)
+        if verify_checksum:
+            try:
+                expected = parse_checksum(fetch(checksum_url(archive.url)))
+            except FileNotFoundError:
+                expected = None
+            if expected is not None:
+                actual = hashlib.sha256(payload).hexdigest()
+                if actual != expected:
+                    raise IngestError(
+                        f"{archive.filename} 的 sha256 与上游 .CHECKSUM 不符"
+                        f"（期望 {expected}，实际 {actual}）——拒绝把可疑字节写进湖"
+                    )
+        return FetchedFile(url=archive.url, filename=archive.filename, payload=payload)
+
+    def normalize(self, spec: IngestSpec, files: Sequence[FetchedFile]) -> NormalizedTable:
+        """归一化 + **裁到请求区间**，并连同核查口径（时间列、步长）一起回传。"""
+        datatype = DataType(spec.datatype)
+        try:
+            _, fn, schema = _BY_DATATYPE[datatype]
+        except KeyError:
+            raise IngestError(f"不支持的 datatype: {spec.datatype}") from None
+        time_col = TIME_COLUMN[str(datatype)]
+        step = self._step(spec)
+        if not files:
+            # 空表也要带口径：通用层靠 `normalize(spec, ())` 问核查参数而不取任何字节。
+            return NormalizedTable(table=schema.empty_table(), time_column=time_col, step=step)
+        parts = [fn(f.payload, symbol=spec.symbol) for f in files]
+        table = clip_to_window(pa.concat_tables(parts).sort_by(time_col), time_col, spec)
+        return NormalizedTable(table=table, time_column=time_col, step=step)
+
+    @staticmethod
+    def _step(spec: IngestSpec) -> dt.timedelta | None:
+        """该 spec 的期望时间步长；`None` = 不做等距检查（funding 间隔由上游逐行给出）。"""
+        datatype = DataType(spec.datatype)
+        if datatype is DataType.KLINE:
+            return FREQ_STEP[str(spec.freq)]
+        if datatype is DataType.OPEN_INTEREST:
+            return METRICS_INTERVAL
+        return None
+
+
+#: 模块级单例——`adapter.get_adapter("binance_vision")` 取的就是它。
+ADAPTER = BinanceVisionAdapter()

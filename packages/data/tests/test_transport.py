@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import pytest
 from quantime_core.allowlist import BINANCE_VISION_ARCHIVE, BINANCE_VISION_SPOT_MIRROR
+from quantime_data import retry
+from quantime_data.spec import IngestError
 from quantime_data.transport import (
     BACKOFF_SCHEDULE,
     PublicTransport,
@@ -284,11 +286,26 @@ def test_404_is_a_missing_file_not_a_rate_limit():
     assert transport.sleeps == []
 
 
-def test_403_is_not_retried():
-    transport, opener = make_transport(Response(403, b""))
-    with pytest.raises(RateLimitedError, match="HTTP 403"):
+@pytest.mark.parametrize("status", [401, 403, 410, 302])
+def test_a_definitive_refusal_raises_ingest_error_without_backoff(status):
+    """R1：401/403/410（及不跟随的 3xx）是上游的明确答复——`IngestError`，一次、不退避。
+
+    以 `RateLimitedError` 抛的话，外层重试会把它当限流再退避 N 轮（旧行为）。
+    """
+    transport, opener = make_transport(Response(status, b""))
+    with pytest.raises(IngestError, match=f"HTTP {status}"):
         transport.get(GOOD_URL)
     assert len(opener.urls) == 1
+    assert transport.sleeps == []
+    assert not retry.is_retryable(IngestError("x"))
+
+
+@pytest.mark.parametrize("status", [418, 429, 500, 502, 503, 504, 599])
+def test_rate_limit_and_server_errors_back_off_then_raise_rate_limited(status):
+    transport, opener = make_transport(Response(status, b""))
+    with pytest.raises(RateLimitedError, match=f"HTTP {status}"):
+        transport.get(GOOD_URL)
+    assert len(opener.urls) == len(transport.sleeps) + 1 > 1
 
 
 def test_min_interval_paces_consecutive_requests():

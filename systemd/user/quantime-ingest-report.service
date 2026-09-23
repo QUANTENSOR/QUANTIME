@@ -1,0 +1,56 @@
+# quantime 每日报告汇总（QNT-45 第 5 项）。
+#
+# 各源的 daily 运行各自产出 data/reports/<date>/<run_id>.{json,md}；这个 unit 在当天
+# 所有源跑完之后汇总一遍，供 owner 一次看全（运行时验收「连续 3 天 coverage=complete」
+# 看的就是这些报告）。
+#
+# **不含任何凭据**，且**不出网**：它只读本地已生成的报告。
+#
+# 安装由 owner 按 systemd/user/INSTALL.md 逐项执行。本卡只交付文件。
+
+[Unit]
+Description=quantime 每日核查报告汇总
+Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INSTALL.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/workspace/quantime
+# 与摄取 unit 同一个数据根（R8）；这几条都不是凭据。
+Environment=QUANTIME_DATA_ROOT=/home/workspace/quantime/data
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=UV_CACHE_DIR=/tmp/uv-cache
+
+# 只读汇总：`report-summary` 按 **JSON 字段**读当天（UTC）全部报告的整体覆盖与合计，
+# 打进 journal；无报告或任一份不是 `complete` → 非零退出（unit 记 failed）。
+# 不用 grep：schema v2 起每条序列里也有 `"coverage"` 键，grep 第一处拿到的可能是某条
+# 序列的覆盖而不是整份报告的（QNT-45 R4）。
+# `--no-sync --offline`：只用已装好的环境，不解析依赖、不出网、不写检出目录；uv 的缓存
+# 目录指到 PrivateTmp 给的私有 /tmp（ProtectHome=read-only 下 ~/.cache 不可写）。
+# 不带 `--extra ingest`：汇总不需要网络库。
+ExecStart=/usr/bin/env sh -c '\
+  exec uv run --no-sync --offline --package quantime-data quantime-ingest report-summary'
+
+Nice=10
+TimeoutStartSec=600
+Restart=no
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# 汇总只读报告，一个字节都不写——连 data/ 都不给写权限。
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+# 不出网：汇总只读本地文件，连 AF_INET 都不需要。
+RestrictAddressFamilies=AF_UNIX
+PrivateNetwork=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quantime-ingest-report

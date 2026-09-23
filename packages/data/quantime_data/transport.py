@@ -20,6 +20,18 @@
 本出口实现「最小请求间隔 + 429/418/5xx 指数退避（含 jitter，尊重 `Retry-After`）」，
 重试用尽即抛 `RateLimitedError`，绝不静默返回空结果。
 
+**出口异常契约**（QNT-45 R1——通用层只按这四类分流，出口之外不许出现第五种）：
+
+| 情况 | 抛出 | 通用层处置 |
+|---|---|---|
+| HTTP 404 | `FileNotFoundError` | 整档缺失，记账、不重试 |
+| HTTP 418 / 429 / 5xx（内层退避用尽） | `RateLimitedError` | 外层退避重试 |
+| 其余非 200（401/403/410、3xx 重定向…） | `IngestError` | 不重试，该序列失败 |
+| 网络层故障（连不上、超时、协议错） | `TransportIOError`（`OSError` 子类） | 外层退避重试 |
+
+网络层故障由 opener 负责包装：`cli._http_opener` 把 `httpx.HTTPError` 全部转成
+`TransportIOError`，因此 httpx 的异常类型不会越过出口。
+
 时钟、休眠与底层 opener 全部可注入，因此全部行为可离线测试：真正的网络只在
 `cli.py` 组装默认 opener 时才出现。
 """
@@ -33,6 +45,8 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from quantime_core.allowlist import HostEntry, HostNotAllowedError, assert_public_readonly_host
+
+from .spec import IngestError
 
 #: 归档文件树的允许前缀。Vision 归档是按 symbol/freq/日期展开的目录树，文件名无法穷举，
 #: 所以这一类只能按前缀放行——但前缀之后的部分已被 `_canonical_path` 规范化过
@@ -77,7 +91,8 @@ _FORBIDDEN_PATH_CHARS = ("%", "\\", " ", "\t", "\r", "\n")
 #: 退避阶梯（秒）。首次重试 1s，其后翻倍；长度即最大重试次数。
 BACKOFF_SCHEDULE: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
 
-#: 触发退避重试的状态码。429 = 超限，418 = 已被 IP ban（必须退避而不是继续打）。
+#: 触发退避重试的状态码（另加整个 5xx 段，见 `is_retryable_status`）。
+#: 429 = 超限，418 = 已被 IP ban（必须退避而不是继续打）。
 RETRYABLE_STATUS: frozenset[int] = frozenset({418, 429, 500, 502, 503, 504})
 
 #: 同一出口两次请求之间的最小间隔（秒）——粗粒度的 IP weight 保护。
@@ -93,6 +108,19 @@ class TransportBoundaryError(RuntimeError):
 
 class RateLimitedError(RuntimeError):
     """退避重试用尽仍被限流／服务端错误。调用方必须让摄取失败，不得当成空结果。"""
+
+
+class TransportIOError(OSError):
+    """网络层故障（连接失败、读超时、协议错误）——**暂时性**，通用层退避重试。
+
+    `OSError` 子类，所以 `retry.RETRYABLE_EXCEPTIONS` 天然覆盖它；opener 把底层客户端的
+    异常包成它再抛，原异常经 `from` 留在 `__cause__` 里。
+    """
+
+
+def is_retryable_status(status: int) -> bool:
+    """418 / 429 与整个 5xx 段值得退避再试；其余非 200 是上游的明确答复，不再试。"""
+    return status in RETRYABLE_STATUS or 500 <= status <= 599
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,9 +269,10 @@ class PublicTransport:
     def get(self, url: str) -> bytes:
         """取一个公共只读 URL 的正文。
 
-        顺序：两道闸（任一不过 → 请求不发出）→ 节流 → 发出 → 按状态码决定退避重试。
-        非重试类错误状态码直接抛 `RateLimitedError` 的兄弟：这里统一用 `RateLimitedError`
-        仅限限流/5xx；4xx（如 404 缺文件）交给调用方按语义处理，故原样抛 `FileNotFoundError`。
+        顺序：两道闸（任一不过 → 请求不发出）→ 节流 → 发出 → 按状态码分流（见模块头的
+        异常契约表）：404 → `FileNotFoundError`；418/429/5xx 退避，用尽 → `RateLimitedError`；
+        其余非 200 → `IngestError`，**不退避**——401/403/410 是上游的明确答复，
+        对它退避只是把一个注定失败的请求重放若干次。
         """
         assert_public_readonly_url(url)
         last_status: int | None = None
@@ -256,8 +285,8 @@ class PublicTransport:
             if response.status == 404:
                 raise FileNotFoundError(f"上游无此文件（404）: {url}")
             last_status = response.status
-            if response.status not in RETRYABLE_STATUS:
-                raise RateLimitedError(f"上游返回 HTTP {response.status}: {url}")
+            if not is_retryable_status(response.status):
+                raise IngestError(f"上游拒绝（HTTP {response.status}，不重试）: {url}")
             if attempt == len(self._backoff):
                 break
             self._nap(self._backoff_seconds(attempt, response.retry_after))

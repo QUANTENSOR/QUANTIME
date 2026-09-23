@@ -114,6 +114,9 @@ class CommittedBatch:
     kind: str
     rerun_of: str | None
     meta_files: tuple[FileEntry, ...] = field(default=())
+    #: 按核查报告补采、但报告里没有原 batch 可接（整条序列当天失败）时，记下那份报告的
+    #: 路径——`kind='ingest'` 的来历写进清单 JSON，不伪造 `rerun_of`（QNT-45 R5）。
+    from_report: str | None = None
 
 
 def _now() -> dt.datetime:
@@ -321,6 +324,7 @@ def commit_batch(
     range_end: dt.datetime | None = None,
     columns: tuple[str, ...] | None = None,
     claim: BatchClaim | None = None,
+    from_report: str | None = None,
 ) -> CommittedBatch:
     """把一个归一化表提交为一个新 batch。
 
@@ -384,17 +388,20 @@ def commit_batch(
     manifest_rel = batch_manifest_path(batch_id)
     manifest_abs = root / manifest_rel
     manifest_abs.parent.mkdir(parents=True, exist_ok=True)
+    manifest: dict[str, object] = {
+        "batch_id": batch_id,
+        "source": source,
+        "batch_dir": spec.batch_dir.as_posix(),
+        "parts": [e.as_dict() for e in parts],
+        "raw": [e.as_dict() for e in raw_entries],
+    }
+    if from_report is not None:
+        manifest["from_report"] = from_report
     _publish_final_text(
         root,
         manifest_abs,
         json.dumps(
-            {
-                "batch_id": batch_id,
-                "source": source,
-                "batch_dir": spec.batch_dir.as_posix(),
-                "parts": [e.as_dict() for e in parts],
-                "raw": [e.as_dict() for e in raw_entries],
-            },
+            manifest,
             indent=2,
             sort_keys=True,
             ensure_ascii=False,
@@ -439,6 +446,7 @@ def commit_batch(
         kind=kind,
         rerun_of=rerun_of,
         meta_files=(meta_entry,),
+        from_report=from_report,
     )
 
 

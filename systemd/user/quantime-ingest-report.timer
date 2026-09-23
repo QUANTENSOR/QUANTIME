@@ -1,0 +1,18 @@
+# 每日报告汇总的触发器（QNT-45 第 5 项）。
+#
+# 排在各源摄取 timer（02:30 UTC + 最多 20m 随机延迟）之后足够远，等它们跑完。
+
+[Unit]
+Description=每日触发 quantime 核查报告汇总
+Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INSTALL.md
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+FixedRandomDelay=true
+AccuracySec=1m
+Unit=quantime-ingest-report.service
+
+[Install]
+WantedBy=timers.target
