@@ -45,6 +45,7 @@ def msg(pairs: dict | None = None) -> email.message.Message:
 def raiser(code: int, headers: dict | None = None):
     def fake(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, code, "err", msg(headers), None)
+
     return fake
 
 
@@ -62,17 +63,25 @@ def main() -> int:
     orig = p.urllib.request.urlopen
     try:
         p.urllib.request.urlopen = raiser(404)
-        check("404 -> NotFound", expect_error(lambda: p._request("https://x/y", None), p.NotFound) is not None)
+        check(
+            "404 -> NotFound",
+            expect_error(lambda: p._request("https://x/y", None), p.NotFound) is not None,
+        )
 
         p.urllib.request.urlopen = raiser(401)
         e = expect_error(lambda: p._request("https://x/y", None), p.ProbeError)
-        check("401 -> ProbeError naming credentials", e is not None and "credential" in str(e).lower())
+        check(
+            "401 -> ProbeError naming credentials", e is not None and "credential" in str(e).lower()
+        )
 
         # Real GitHub capitalisation — the regression this file exists for.
-        p.urllib.request.urlopen = raiser(403, {"X-RateLimit-Remaining": "0",
-                                                "X-RateLimit-Reset": "1790000000"})
+        p.urllib.request.urlopen = raiser(
+            403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790000000"}
+        )
         e = expect_error(lambda: p._request("https://x/y", None), p.ProbeError)
-        check("403 + capitalised headers -> rate-limited", e is not None and "rate-limited" in str(e))
+        check(
+            "403 + capitalised headers -> rate-limited", e is not None and "rate-limited" in str(e)
+        )
         check("rate-limit message names GITHUB_TOKEN", e is not None and "GITHUB_TOKEN" in str(e))
 
         p.urllib.request.urlopen = raiser(403, {"X-RateLimit-Remaining": "57"})
@@ -85,6 +94,7 @@ def main() -> int:
 
         def neterr(req, timeout=None):
             raise urllib.error.URLError("dns boom")
+
         p.urllib.request.urlopen = neterr
         e = expect_error(lambda: p._request("https://x/y", None), p.ProbeError)
         check("network error -> ProbeError", e is not None and "network error" in str(e))
@@ -125,8 +135,10 @@ def main() -> int:
         check("absent token -> None (no default)", p._token() is None)
 
         # Link header parsing drives the commit count.
-        link = ('<https://api.github.com/r?page=2>; rel="next", '
-                '<https://api.github.com/r?page=7>; rel="last"')
+        link = (
+            '<https://api.github.com/r?page=2>; rel="next", '
+            '<https://api.github.com/r?page=7>; rel="last"'
+        )
         check("Link rel=last parsed", p._parse_link_last(msg({"Link": link})) == 7)
         check("no Link header -> None", p._parse_link_last(msg()) is None)
     finally:

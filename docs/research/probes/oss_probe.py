@@ -53,18 +53,42 @@ SINCE = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=365)).str
 )
 
 REPOS = [
-    "tradingview/lightweight-charts", "klinecharts/KLineChart", "perspective-dev/perspective",
-    "freqtrade/frequi", "OpenBB-finance/OpenBB", "ranaroussi/yfinance",
-    "databento/databento-python", "gerrymanoim/exchange_calendars", "dlt-hub/dlt", "ccxt/ccxt",
-    "docling-project/docling", "Unstructured-IO/unstructured", "opendatalab/MinerU",
-    "chroma-core/chroma", "zotero/zotero", "paperless-ngx/paperless-ngx",
-    "microsoft/qlib", "stefan-jansen/alphalens-reloaded", "TA-Lib/ta-lib-python",
-    "xgboosted/pandas-ta-classic", "bukosabino/ta",
-    "polakowo/vectorbt", "stefan-jansen/zipline-reloaded", "QuantConnect/Lean",
-    "nautechsystems/nautilus_trader", "kernc/backtesting.py", "pmorissette/bt",
-    "PyPortfolio/PyPortfolioOpt", "dcajasn/Riskfolio-Lib", "skfolio/skfolio",
-    "ranaroussi/quantstats", "alpacahq/alpaca-py", "hummingbot/hummingbot",
-    "freqtrade/freqtrade", "jesse-ai/jesse", "ib-api-reloaded/ib_async",
+    "tradingview/lightweight-charts",
+    "klinecharts/KLineChart",
+    "perspective-dev/perspective",
+    "freqtrade/frequi",
+    "OpenBB-finance/OpenBB",
+    "ranaroussi/yfinance",
+    "databento/databento-python",
+    "gerrymanoim/exchange_calendars",
+    "dlt-hub/dlt",
+    "ccxt/ccxt",
+    "docling-project/docling",
+    "Unstructured-IO/unstructured",
+    "opendatalab/MinerU",
+    "chroma-core/chroma",
+    "zotero/zotero",
+    "paperless-ngx/paperless-ngx",
+    "microsoft/qlib",
+    "stefan-jansen/alphalens-reloaded",
+    "TA-Lib/ta-lib-python",
+    "xgboosted/pandas-ta-classic",
+    "bukosabino/ta",
+    "polakowo/vectorbt",
+    "stefan-jansen/zipline-reloaded",
+    "QuantConnect/Lean",
+    "nautechsystems/nautilus_trader",
+    "kernc/backtesting.py",
+    "pmorissette/bt",
+    "PyPortfolio/PyPortfolioOpt",
+    "dcajasn/Riskfolio-Lib",
+    "skfolio/skfolio",
+    "ranaroussi/quantstats",
+    "alpacahq/alpaca-py",
+    "hummingbot/hummingbot",
+    "freqtrade/freqtrade",
+    "jesse-ai/jesse",
+    "ib-api-reloaded/ib_async",
     "stefan-jansen/machine-learning-for-trading",
 ]
 
@@ -109,16 +133,19 @@ def _token_source() -> str:
     if not src:
         return "unspecified-source"
     if src.startswith("op:") and not src.startswith("op://"):
-        src = "op://" + src[len("op:"):]
+        src = "op://" + src[len("op:") :]
     return src
 
 
 def _request(url: str, token: str | None) -> tuple[object, object]:
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": UA,
-        "X-GitHub-Api-Version": "2022-11-28",
-    })
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": UA,
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
@@ -137,8 +164,11 @@ def _request(url: str, token: str | None) -> tuple[object, object]:
             remaining = hdrs.get("x-ratelimit-remaining") if hdrs else None
             reset = hdrs.get("x-ratelimit-reset") if hdrs else None
             if remaining == "0":
-                when = (datetime.datetime.fromtimestamp(int(reset), datetime.UTC).isoformat()
-                        if reset else "unknown")
+                when = (
+                    datetime.datetime.fromtimestamp(int(reset), datetime.UTC).isoformat()
+                    if reset
+                    else "unknown"
+                )
                 raise ProbeError(
                     f"HTTP 403 rate-limited for {url} — quota exhausted, resets {when}. "
                     "Anonymous quota is 60 req/h; set GITHUB_TOKEN to raise it."
@@ -211,8 +241,9 @@ def pypi(pkg: str) -> dict | None:
             for c in info.get("classifiers", [])
             if "Programming Language :: Python :: 3." in c
         ),
-        "wheel_tags": sorted({f["filename"].split("-")[2]
-                              for f in files if f["packagetype"] == "bdist_wheel"}),
+        "wheel_tags": sorted(
+            {f["filename"].split("-")[2] for f in files if f["packagetype"] == "bdist_wheel"}
+        ),
         "has_sdist": any(f["packagetype"] == "sdist" for f in files),
     }
 
@@ -306,8 +337,11 @@ def main() -> int:
     auth_mode = f"token({_token_source()})" if token else "anonymous"
     print(f"auth_mode={auth_mode}  since={SINCE}  repos={len(REPOS)}", file=sys.stderr)
     if not token:
-        print("  note: anonymous GitHub quota is 60 req/h; this probe needs more. "
-              "Set GITHUB_TOKEN if you hit HTTP 403 rate-limit.", file=sys.stderr)
+        print(
+            "  note: anonymous GitHub quota is 60 req/h; this probe needs more. "
+            "Set GITHUB_TOKEN if you hit HTTP 403 rate-limit.",
+            file=sys.stderr,
+        )
 
     rows = []
     for repo in REPOS:
@@ -319,19 +353,25 @@ def main() -> int:
         if meta:
             dists[repo] = meta
 
-    json.dump({
-        "probed_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "since": SINCE,
-        "auth_mode": auth_mode,
-        "commits_1y_method": (
-            "GET /repos/{repo}/commits?since=<now-365d>&per_page=100; exact count via "
-            "the Link rel=last page number plus the final page length "
-            "((last-1)*100 + len(last)); default branch, merge commits included"
-        ),
-        "failures": FAILURES,
-        "repos": rows,
-        "pypi": dists,
-    }, sys.stdout, indent=2, ensure_ascii=False, sort_keys=False)
+    json.dump(
+        {
+            "probed_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "since": SINCE,
+            "auth_mode": auth_mode,
+            "commits_1y_method": (
+                "GET /repos/{repo}/commits?since=<now-365d>&per_page=100; exact count via "
+                "the Link rel=last page number plus the final page length "
+                "((last-1)*100 + len(last)); default branch, merge commits included"
+            ),
+            "failures": FAILURES,
+            "repos": rows,
+            "pypi": dists,
+        },
+        sys.stdout,
+        indent=2,
+        ensure_ascii=False,
+        sort_keys=False,
+    )
     print()
 
     if FAILURES:

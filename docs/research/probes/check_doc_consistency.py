@@ -16,14 +16,17 @@ DOC = os.path.join(HERE, "..", "oss-references.md")
 RESULTS = os.path.join(HERE, "oss-results.json")
 
 ROW = re.compile(
-    r"^\| [^|]+ \| \[([^\]]+)\]\(https://github\.com/[^)]+\) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$",
+    r"^\| [^|]+ \| \[([^\]]+)\]\(https://github\.com/[^)]+\) \| "
+    r"([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$",
     re.M,
 )
 
 
 def main() -> int:
-    doc = open(DOC, encoding="utf-8").read()
-    data = json.load(open(RESULTS, encoding="utf-8"))
+    with open(DOC, encoding="utf-8") as f:
+        doc = f.read()
+    with open(RESULTS, encoding="utf-8") as f:
+        data = json.load(f)
     rows = {r["repo"].lower(): r for r in data["repos"]}
     table = ROW.findall(doc)
     bad: list[str] = []
@@ -66,8 +69,11 @@ def main() -> int:
     if bad:
         print(f"{len(bad)} mismatch(es)", file=sys.stderr)
         return 1
-    print(f"OK: {len(table)}/{len(data['repos'])} rows consistent "
-          f"(commits_1y, pushed_at, spdx, release tag + date); auth_mode={data['auth_mode']}; no failures")
+    print(
+        f"OK: {len(table)}/{len(data['repos'])} rows consistent "
+        f"(commits_1y, pushed_at, spdx, release tag + date); "
+        f"auth_mode={data['auth_mode']}; no failures"
+    )
     return 0
 
 
