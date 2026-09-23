@@ -14,7 +14,7 @@
 | `arxiv-1903.06033` | 2019 | crypto | reversal | yes | Altcoin-Bitcoin Arbitrage | [link](https://arxiv.org/abs/1903.06033) |
 | `arxiv-1904.00890` | 2019 | crypto | momentum | partial | Momentum and liquidity in cryptocurrencies | [link](https://arxiv.org/abs/1904.00890) |
 | `arxiv-1904.09403` | 2019 | crypto | momentum | yes | On the Evolution of Cryptocurrency Market Efficiency | [link](https://arxiv.org/abs/1904.09403) |
-| `arxiv-1906.03430` | 2019 | crypto | volatility | yes | The Effects of the Introduction of Bitcoin Futures on the Volatility of Bitcoin Returns | [link](https://arxiv.org/abs/1906.03430) |
+| `arxiv-1906.03430` | 2019 | crypto | volatility | partial | The Effects of the Introduction of Bitcoin Futures on the Volatility of Bitcoin Returns | [link](https://arxiv.org/abs/1906.03430) |
 | `arxiv-1912.03270` | 2019 | crypto | funding | yes | BitMEX Funding Correlation with Bitcoin Exchange Rate | [link](https://arxiv.org/abs/1912.03270) |
 | `nber-w25882` | 2019 | crypto | size | partial | Common Risk Factors in Cryptocurrency | [link](https://www.nber.org/papers/w25882) |
 | `arxiv-2004.07290` | 2020 | crypto | network | no | From code to market: Network of developers and correlated returns of cryptocurrencies | [link](https://arxiv.org/abs/2004.07290) |
@@ -22,7 +22,7 @@
 | `arxiv-2108.11921` | 2021 | crypto | momentum | partial | A Time-Varying Network for Cryptocurrencies | [link](https://arxiv.org/abs/2108.11921) |
 | `arxiv-2109.10662` | 2021 | crypto | pairs | yes | Evaluation of Dynamic Cointegration-Based Pairs Trading Strategy in the Cryptocurrency Market | [link](https://arxiv.org/abs/2109.10662) |
 | `arxiv-2202.08967` | 2022 | crypto | sentiment | no | Beyond Trading Data: The Hidden Influence of Public Awareness and Interest on Cryptocurrency Volatility | [link](https://arxiv.org/abs/2202.08967) |
-| `arxiv-2202.09845` | 2022 | crypto | oi | yes | On the Dynamics of Solid, Liquid and Digital Gold Futures | [link](https://arxiv.org/abs/2202.09845) |
+| `arxiv-2202.09845` | 2022 | crypto | oi | partial | On the Dynamics of Solid, Liquid and Digital Gold Futures | [link](https://arxiv.org/abs/2202.09845) |
 | `arxiv-2206.03386` | 2022 | crypto | network | partial | Dependency structures in cryptocurrency market from high to low frequency | [link](https://arxiv.org/abs/2206.03386) |
 | `arxiv-2211.13274` | 2022 | crypto | volatility | no | Investor base and idiosyncratic volatility of cryptocurrencies | [link](https://arxiv.org/abs/2211.13274) |
 | `arxiv-2212.06888` | 2022 | crypto | carry | partial | Fundamentals of Perpetual Futures | [link](https://arxiv.org/abs/2212.06888) |

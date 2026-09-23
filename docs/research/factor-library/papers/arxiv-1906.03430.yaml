@@ -15,14 +15,14 @@ factor_definition: 用分钟价格计算已实现波动，比较比特币期货�
 family: volatility
 frequency: intraday
 required_fields:
-- name: close
+- name: close_1m
   frequency: intraday
 original_findings:
   sample_market: 四家加密交易所的比特币
   sample_period: 摘要以期货上市为事件，未给日历起止
   stats: 上市后短期内更波动，随后比上市前更稳定（摘要，无具体 σ 数字）。
-reproducible: 'yes'
-reproducible_reason: 原文已实现波动由分钟价格直接计算。Vision OHLCV 多周期含分钟 K 线，可按该定义直接计算，不换变量。
+reproducible: partial
+reproducible_reason: 原文用 1m 已实现波动；我们只有 QNT-28 契约的 1h/4h/1d；替换为 1h 已实现波动（未获准）。
 markets:
 - crypto
 url: https://arxiv.org/abs/1906.03430

@@ -23,12 +23,14 @@ required_fields:
   frequency: daily
 - name: open_interest
   frequency: daily
+- name: expiry
+  frequency: daily
 original_findings:
   sample_market: 黄金、原油、比特币期货
   sample_period: 2017-12-18 至 2021-11-30（摘要）
   stats: 成交量对三类资产波动有正且显著作用；持仓量在显著时为负（摘要）。
-reproducible: 'yes'
-reproducible_reason: 原文比特币腿的解释变量就是成交量、未平仓量与现货/期货价格。Vision OHLCV 与 OI 可按该定义直接计算，不换变量。
+reproducible: partial
+reproducible_reason: 原文用逐到期交割合约（含 maturity 对波动与基差的作用）；我们只有现货 + USDT 永续 OHLCV/OI，无到期；替换为无到期永续上的成交量/OI 回归（未获准，不得保留 yes）。
 markets:
 - crypto
 url: https://arxiv.org/abs/2202.09845

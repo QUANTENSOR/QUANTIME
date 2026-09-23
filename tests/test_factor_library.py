@@ -37,7 +37,7 @@ def test_library_meets_batch_counts(records):
     assert len(crypto) >= 12
     assert len(us) >= 12
     crypto_yes = [r for r in crypto if r["reproducible"] == "yes"]
-    assert len(crypto_yes) >= 7
+    assert len(crypto_yes) >= 6
     us_yes = [r for r in us if r["reproducible"] == "yes"]
     assert us_yes, "美股线至少应有若干 yes（日线 OHLCV+市值，待付费源）"
     for r in us_yes:
@@ -61,6 +61,8 @@ def test_reject_downgrades_are_partial_with_substitution_formula(records):
         "arxiv-2108.11921",
         "arxiv-2409.00416",
         "arxiv-2607.01377",
+        "arxiv-2202.09845",
+        "arxiv-1906.03430",
     )
     for rid in named:
         rec = by_id[rid]
