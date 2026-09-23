@@ -14,19 +14,21 @@ Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INST
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/quantime
+WorkingDirectory=/home/workspace/quantime
+# 与摄取 unit 同一个数据根（R8）；这几条都不是凭据。
+Environment=QUANTIME_DATA_ROOT=/home/workspace/quantime/data
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=UV_CACHE_DIR=/tmp/uv-cache
 
 # 只读汇总：`report-summary` 按 **JSON 字段**读当天（UTC）全部报告的整体覆盖与合计，
 # 打进 journal；无报告或任一份不是 `complete` → 非零退出（unit 记 failed）。
-# 不用 grep：schema v2 每条序列里也有 `"coverage"` 键，grep 第一处拿到的可能是某条
+# 不用 grep：schema v2 起每条序列里也有 `"coverage"` 键，grep 第一处拿到的可能是某条
 # 序列的覆盖而不是整份报告的（QNT-45 R4）。
 # `--no-sync --offline`：只用已装好的环境，不解析依赖、不出网、不写检出目录；uv 的缓存
 # 目录指到 PrivateTmp 给的私有 /tmp（ProtectHome=read-only 下 ~/.cache 不可写）。
 # 不带 `--extra ingest`：汇总不需要网络库。
 ExecStart=/usr/bin/env sh -c '\
-  cd "%h/quantime" && \
-  UV_CACHE_DIR=/tmp/uv-cache exec uv run --no-sync --offline --package quantime-data \
-    quantime-ingest --root "%h/quantime" report-summary'
+  exec uv run --no-sync --offline --package quantime-data quantime-ingest report-summary'
 
 Nice=10
 TimeoutStartSec=600

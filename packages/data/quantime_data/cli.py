@@ -17,6 +17,14 @@
 `backfill`  按一份核查报告补采缺口（新批次：有原 batch 的走 `kind='rerun'` + `rerun_of`，
             原序列当天整条失败的走 `kind='ingest'` + `from_report`；不动任何已发布文件）
 `report-summary`  按 JSON 字段汇总某天的全部报告（汇总 unit 调它；不出网、不写文件）
+`record-abort`    记一笔「运行在摄取前被拦下」（`pull_failed` / `disk_low`）：运行记录 +
+                  报告（coverage=failed），退出码 1。摄取 unit 的 `ExecStopPost` 调它（R8）
+
+数据根（R8）
+------------
+`--root`（缺省取环境变量 `QUANTIME_DATA_ROOT`，再缺省 `.`）接受两种写法，指向同一处：
+**数据目录本身**（`…/quantime/data`，owner 统一的写法）或**它的父目录**
+（含 `data/` 的那一层，QNT-28 以来的写法）。判定规则见 `resolve_root`。
 
 `daily` / `backfill` 的逻辑全在 `daily.py`（源无关通用层），本模块只解析参数、
 组装真实网络出口、打印结果。
@@ -27,6 +35,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -43,6 +52,7 @@ from .retry import (
     DEFAULT_MAX_TOTAL_SECONDS,
     RetryPolicy,
 )
+from .runlog import ABORT_REASONS
 from .transport import PublicTransport, Response, TransportIOError, assert_public_readonly_url
 from .universe import load_universe
 
@@ -151,12 +161,36 @@ def _date(value: str) -> dt.date:
     return dt.date.fromisoformat(value)
 
 
+#: 数据根的环境变量（systemd unit 用 `Environment=` 设它，不在 ExecStart 里重复写路径）。
+DATA_ROOT_ENV = "QUANTIME_DATA_ROOT"
+
+
+def resolve_root(value: str | os.PathLike[str]) -> Path:
+    """把 `--root` 归一成「含 `data/` 的那一层」——包内全部路径都是 `root / "data/..."`。
+
+    - 名字就叫 `data` 且里面**没有**再嵌一层 `data/` → 它是数据目录本身，取父目录。
+      常驻布局里它是软链接也一样：取的是「父目录下名叫 data 的那一项」的父目录。
+    - 其余 → 原样（它就是含 `data/` 的那一层，或者一个还没建过 `data/` 的新根）。
+
+    这样 owner 统一的 `--root …/quantime/data` 不会写出 `data/data/...`。
+    """
+    path = Path(value)
+    if path.name == "data" and not (path / "data").exists():
+        return path.parent
+    return path
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="quantime-ingest",
         description="Binance 公开归档摄取（无 key、只读；QNT-28）",
     )
-    parser.add_argument("--root", type=Path, default=Path("."), help="数据根目录（含 data/）")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path(os.environ.get(DATA_ROOT_ENV) or "."),
+        help=f"数据目录本身（…/data）或含 data/ 的父目录；缺省取 ${DATA_ROOT_ENV}，再缺省 .",
+    )
     parser.add_argument("--universe", type=Path, default=None, help="标的清单 YAML")
     parser.add_argument(
         "--source",
@@ -218,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
                 help="增量：区间起点按已提交 ingestion_batch 的水位线推算",
             )
             _add_retry_flags(p)
+            _add_disk_flag(p)
 
     bf = sub.add_parser("backfill")
     bf.add_argument(
@@ -235,6 +270,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="只打印补采计划，不取任何字节、不写任何文件"
     )
     _add_retry_flags(bf)
+    _add_disk_flag(bf)
+
+    ra = sub.add_parser("record-abort")
+    ra.add_argument(
+        "--reason",
+        required=True,
+        choices=list(ABORT_REASONS),
+        help="拦下的原因（pull_failed = 运行前 git pull 失败；disk_low = 磁盘不足）",
+    )
+    ra.add_argument("--detail", default=None, help="写进报告的一句说明（可选）")
+    ra.add_argument("--run-id", default=None, help="默认新建一个 ULID")
 
     rs = sub.add_parser("report-summary")
     rs.add_argument(
@@ -260,6 +306,20 @@ def _add_retry_flags(p: argparse.ArgumentParser) -> None:
         default=DEFAULT_MAX_TOTAL_SECONDS,
         help=f"本次运行的重试墙钟预算（秒，默认 {DEFAULT_MAX_TOTAL_SECONDS:g}）",
     )
+
+
+def _add_disk_flag(p: argparse.ArgumentParser) -> None:
+    """磁盘守卫阈值（R8）：数据根所在文件系统剩余低于它就不开新 batch。0 = 关闭。"""
+    p.add_argument(
+        "--min-free-gb",
+        type=float,
+        default=daily_mod.DEFAULT_MIN_FREE_BYTES / 1024**3,
+        help="数据根所在文件系统的最低剩余空间（GB，默认 5；0 关闭守卫）",
+    )
+
+
+def _min_free_bytes(args) -> int | None:
+    return int(args.min_free_gb * 1024**3) if args.min_free_gb > 0 else None
 
 
 def _retry_policy(args) -> RetryPolicy:
@@ -390,8 +450,22 @@ def _run_daily(args) -> int:
         since_last=args.since_last,
         verify_checksum=not args.no_verify_checksum,
         retry_policy=_retry_policy(args),
+        min_free_bytes=_min_free_bytes(args),
     )
-    _print_run(out)
+    _print_run(args.root, out)
+    return out.exit_code
+
+
+def _run_record_abort(args) -> int:
+    """systemd `ExecStopPost` 调它：运行前的 `git pull --ff-only` 失败时留一笔可查的记录。"""
+    out = daily_mod.record_abort(
+        args.root,
+        args.reason,
+        run_id=args.run_id or new_run_id(),
+        source=args.source,
+        detail=args.detail,
+    )
+    _print_run(args.root, out)
     return out.exit_code
 
 
@@ -419,18 +493,27 @@ def _run_backfill(args) -> int:
         adapter=adapter,
         verify_checksum=not args.no_verify_checksum,
         retry_policy=_retry_policy(args),
+        min_free_bytes=_min_free_bytes(args),
     )
-    _print_run(out)
+    _print_run(args.root, out)
     return out.exit_code
 
 
-def _print_run(out: daily_mod.RunOutput) -> None:
-    """一行 JSON 汇总到 stdout，明细到 stderr（journald 里一眼可读）。"""
+def _print_run(root: Path, out: daily_mod.RunOutput) -> None:
+    """一行 JSON 汇总到 stdout，明细到 stderr（journald 里一眼可读）。
+
+    `report_json` 是报告文件的路径、`report_sha256` 是它的内容 hash（此前 `report_json`
+    误填成了 hash，R7 端到端测试按路径读报告时暴露）。
+    """
+    from .report import report_paths
+
+    published = out.report_paths is not None
     print(
         json.dumps(
             {
                 "run_id": out.run_id,
                 "mode": out.log.mode,
+                "abort_reason": out.log.abort_reason,
                 "outcome": out.log.outcome,
                 "coverage": out.report.coverage,
                 "series": len(out.log.series),
@@ -441,7 +524,8 @@ def _print_run(out: daily_mod.RunOutput) -> None:
                 "pending_series": out.report.count("pending"),
                 "rows": out.log.total_rows,
                 "retries": out.log.total_retries,
-                "report_json": out.report_paths[0] if out.report_paths else None,
+                "report_json": str(report_paths(root, out.report)[0]) if published else None,
+                "report_sha256": out.report_paths[0] if published else None,
             },
             ensure_ascii=False,
         )
@@ -467,6 +551,7 @@ def _run_report_summary(args) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    args.root = resolve_root(args.root)
     if args.command == "report-summary":
         return _run_report_summary(args)
     if args.command == "plan":
@@ -477,6 +562,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_daily(args)
     if args.command == "backfill":
         return _run_backfill(args)
+    if args.command == "record-abort":
+        return _run_record_abort(args)
     raise AssertionError(f"未处理的子命令: {args.command}")  # pragma: no cover
 
 

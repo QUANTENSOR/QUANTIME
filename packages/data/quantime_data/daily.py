@@ -8,11 +8,15 @@
 
     对每条序列：
       定请求日（`as_of` = 本次运行的 UTC 日期；adapter 据此只列已发布的归档）
-      推算增量区间（`--since-last`：有水位线就从水位线次日起）—— 空增量则记一笔 skip
+      推算增量区间（`--since-last`：起点 = min(水位线次日, 未消化的 pending 起点)）
+        —— 空增量则记一笔 skip
       → 整段都还没发布 → 记 `pending_upstream`，不取、不算失败
+      → 磁盘守卫：数据根所在文件系统剩余 < 阈值 → 不开新 batch，记 `disk_low`（R8）
       → 带退避重试地摄取（`retry.RetryContext`）
       → 核查刚提交的 batch（缺口 / 重复 / 覆盖）
       → 记进运行记录与报告（**失败的序列同样进报告**，带结构化缺档清单，补采据此重建）
+      → `--since-last` 下本次什么都没提交的序列：请求起点记进运行记录 `pending_since`，
+        之后的 `--since-last` 从那里续取（R7；没有它，空湖首跑的 pending 日子会随「昨日」漂走）
     最后：发布 `data/reports/<date>/<run_id>.{json,md}` 与 `data/runs/<run_id>/run_log.json`
 
 退出码来自运行记录：有任何失败即非零（`runlog.RunLog.exit_code`）。
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import shutil
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -40,13 +45,24 @@ from .report import (
     series_pending,
 )
 from .retry import RetryContext, RetryExhaustedError, RetryPolicy
-from .runlog import RunLog, SeriesOutcome, publish_run_log
+from .runlog import (
+    ABORT_DISK_LOW,
+    PendingSince,
+    RunLog,
+    SeriesOutcome,
+    publish_run_log,
+    read_pending_since,
+)
 from .spec import Fetcher, IngestError, IngestSpec
 
 #: 运行模式——写进报告与运行记录，事后能分辨这一份是日常增量还是一次补采。
 MODE_FULL = "full"
 MODE_INCREMENTAL = "incremental"
 MODE_BACKFILL = "backfill"
+MODE_ABORTED = "aborted"
+
+#: 磁盘守卫默认阈值：数据根所在文件系统剩余不足 5 GB 就不开新 batch（owner 裁决 2026-09-23）。
+DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
 
 
 @dataclass(slots=True)
@@ -76,6 +92,25 @@ def error_class(exc: BaseException) -> str:
     name = type(exc).__name__
     cause = exc.__cause__
     return f"{name}({type(cause).__name__})" if cause is not None else name
+
+
+def free_bytes(root: Path) -> int:
+    """数据根所在文件系统的剩余字节。`data/` 可能是指向别的盘的软链接，所以量它而不是量 root。"""
+    target = root / "data"
+    return shutil.disk_usage(target if target.exists() else root).free
+
+
+def disk_low_reason(root: Path, min_free_bytes: int | None) -> str | None:
+    """磁盘守卫（R8）：剩余不足阈值 → 回传写进报告的原因；够用或守卫关闭 → `None`。"""
+    if min_free_bytes is None:
+        return None
+    free = free_bytes(root)
+    if free >= min_free_bytes:
+        return None
+    return (
+        f"{ABORT_DISK_LOW}: 数据根所在文件系统剩余 {free / 1024**3:.2f} GB"
+        f" < 阈值 {min_free_bytes / 1024**3:.2f} GB，拒绝开始新 batch"
+    )
 
 
 def pending_windows(adapter: SourceAdapter, spec: IngestSpec) -> tuple[PendingWindow, ...]:
@@ -174,8 +209,12 @@ def _process_series(
     verify_checksum: bool,
     monotonic,
     from_report: str | None = None,
-) -> None:
-    """一条序列：待发布判定 → 摄取 → 核查 → 记账。成功、失败、待发布**都进报告**。"""
+    min_free_bytes: int | None = DEFAULT_MIN_FREE_BYTES,
+) -> bool:
+    """一条序列：待发布判定 → 磁盘守卫 → 摄取 → 核查 → 记账。回传「是否提交了 batch」。
+
+    成功、失败、待发布、被磁盘守卫拦下的**都进报告**。
+    """
     pending = pending_windows(adapter, target)
     pending_days = sum((b - a).days + 1 for a, b in pending)
     if not adapter.list_archives(target) and pending:
@@ -188,7 +227,39 @@ def _process_series(
             )
         )
         out.report.add(series_pending(target, source=adapter.name, pending_upstream=pending))
-        return
+        return False
+    low = disk_low_reason(root, min_free_bytes)
+    if low is not None:
+        # 不开新 batch：一个字节都不取、不写。缺档照样进报告，磁盘腾出来后可按报告补采，
+        # `--since-last` 也会从本次的起点续取（`pending_since`）。
+        out.log.abort_reason = ABORT_DISK_LOW
+        out.report.abort_reason = ABORT_DISK_LOW
+        if low not in out.report.failures:
+            out.report.failures.append(low)
+        out.log.record(
+            SeriesOutcome(
+                spec=target.describe(),
+                source=adapter.name,
+                action="failed",
+                error=low,
+                error_class=ABORT_DISK_LOW,
+                pending_upstream_days=pending_days,
+            )
+        )
+        out.report.add(
+            series_failed(
+                target,
+                source=adapter.name,
+                error_class=ABORT_DISK_LOW,
+                error=low,
+                missing_archives=tuple(adapter.list_archives(target)),
+                pending_upstream=pending,
+                retries=0,
+                attempts=0,
+                elapsed_seconds=0.0,
+            )
+        )
+        return False
     result, outcome, failure = _ingest_series(
         root,
         target,
@@ -222,7 +293,7 @@ def _process_series(
                 elapsed_seconds=outcome.elapsed_seconds,
             )
         )
-        return
+        return False
     assert result is not None
     out.results.append(result)
     audited = ingest_mod.audit_result(root, result, adapter)
@@ -243,6 +314,7 @@ def _process_series(
             pending_upstream=pending,
         )
     )
+    return True
 
 
 def run_daily(
@@ -260,6 +332,7 @@ def run_daily(
     now: dt.datetime | None = None,
     write_report: bool = True,
     report_date: dt.date | None = None,
+    min_free_bytes: int | None = DEFAULT_MIN_FREE_BYTES,
 ) -> RunOutput:
     """跑一轮摄取 + 核查 + 报告。**不出网**：字节全经注入的 `fetch`。
 
@@ -270,6 +343,13 @@ def run_daily(
 
     每条 spec 的请求日（`as_of`）未指定时取本次运行的 UTC 日期：adapter 按它判断哪些归档
     已经发布（R2）。
+
+    `since_last=True` 下本次没有提交 batch 的序列（整段待发布 / 失败 / 磁盘守卫拦下），把它
+    的请求起点记进运行记录 `pending_since`（R7）：下一次从 `min(水位线次日, 该起点)` 续取，
+    真实 batch 提交到那天或更后才算消化。
+
+    `min_free_bytes` 是磁盘守卫阈值（默认 5 GB，`None` 关闭）；不足时不开新 batch、
+    运行记录 `abort_reason=disk_low`、报告 coverage 为 `failed`（R8）。
     """
     root = Path(root)
     adapter = adapter if adapter is not None else get_adapter()
@@ -285,11 +365,12 @@ def run_daily(
     )
     out = RunOutput(run_id=run_id, log=log, report=report)
     run_started = monotonic()
+    pending_index = read_pending_since(root) if since_last else {}
 
     for spec in specs:
         if spec.as_of is None:
             spec = spec.requested_on(stamp.date())
-        target = plan_incremental(root, spec, adapter.name) if since_last else spec
+        target = plan_incremental(root, spec, adapter.name, pending_index) if since_last else spec
         if since_last:
             out.increments.append(describe_increment(spec, target))
             note = start_ignored_note(spec, target)
@@ -304,7 +385,7 @@ def run_daily(
                 )
             )
             continue
-        _process_series(
+        committed = _process_series(
             root,
             target,
             fetch,
@@ -317,7 +398,19 @@ def run_daily(
             rerun_of=None,
             verify_checksum=verify_checksum,
             monotonic=monotonic,
+            min_free_bytes=min_free_bytes,
         )
+        if since_last and not committed:
+            log.pending_since.append(
+                PendingSince(
+                    source=adapter.name,
+                    asset_class=str(target.asset_class),
+                    datatype=str(target.datatype),
+                    freq=str(target.freq),
+                    scope=target.scope,
+                    since=target.start,
+                )
+            )
 
     report.elapsed_seconds = monotonic() - run_started
     out.retry_log = retry.log_lines()
@@ -342,6 +435,7 @@ def run_backfill_from_report(
     write_report: bool = True,
     report_date: dt.date | None = None,
     whitelist=None,
+    min_free_bytes: int | None = DEFAULT_MIN_FREE_BYTES,
 ) -> RunOutput:
     """按一份核查报告补采缺口，并产出**补采后的**新报告。
 
@@ -384,11 +478,52 @@ def run_backfill_from_report(
             verify_checksum=verify_checksum,
             monotonic=monotonic,
             from_report=task.from_report,
+            min_free_bytes=min_free_bytes,
         )
 
     report.elapsed_seconds = monotonic() - run_started
     out.retry_log = retry.log_lines()
     if write_report:
         out.report_paths = publish_report(root, report)
+    publish_run_log(root, log, now=stamp)
+    return out
+
+
+def record_abort(
+    root: str | os.PathLike[str],
+    reason: str,
+    *,
+    run_id: str,
+    source: str,
+    detail: str | None = None,
+    now: dt.datetime | None = None,
+) -> RunOutput:
+    """记一笔「本次运行在摄取之前就被拦下」：运行记录 + 报告（coverage=failed）。
+
+    systemd unit 在 `ExecStartPre` 拉代码失败时调它（`record-abort --reason pull_failed`）：
+    那时主进程根本不会启动，没有这一笔，当天的运行记录与报告就是空的——事后分不清
+    「拉代码失败」与「timer 没跑」。不出网、不取任何字节、不写任何 batch。
+    """
+    root = Path(root)
+    stamp = _now(now)
+    log = RunLog(
+        run_id=run_id,
+        source=source,
+        mode=MODE_ABORTED,
+        started_at=stamp,
+        abort_reason=reason,
+    )
+    if detail:
+        log.notes.append(detail)
+    report = DailyReport(
+        run_id=run_id,
+        report_date=stamp.date(),
+        generated_at=stamp,
+        mode=MODE_ABORTED,
+        abort_reason=reason,
+    )
+    report.failures.append(f"{reason}: {detail}" if detail else reason)
+    out = RunOutput(run_id=run_id, log=log, report=report)
+    out.report_paths = publish_report(root, report)
     publish_run_log(root, log, now=stamp)
     return out

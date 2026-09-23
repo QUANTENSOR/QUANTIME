@@ -1,7 +1,7 @@
 """缺口补采（QNT-45 第 3 项）——**源无关**：从核查报告读缺档，按新 batch 补回。
 
 输入是 `--backfill-from-report <path>` 指的那份 JSON 报告（`report.py` 生成的那一份，
-schema v2）。报告里每条序列都带足够的字段重建 `IngestSpec`（含请求日 `as_of`），以及
+schema v3）。报告里每条序列都带足够的字段重建 `IngestSpec`（含请求日 `as_of`），以及
 **结构化的缺档清单** `missing_archives`（url / filename / covers_start / covers_end）。
 两类序列都产出任务（QNT-45 R5）：
 

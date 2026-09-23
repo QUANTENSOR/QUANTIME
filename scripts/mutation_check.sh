@@ -374,6 +374,60 @@ mutate "Q45-R5 失败序列的缺档进补采计划" "$DATA/daily.py" \
   'missing_archives=adapter.list_archives(target),=>>missing_archives=(),' \
   packages/data/tests/test_recovery.py::test_a_single_day_that_failed_entirely_becomes_one_ingest_task
 
+# ---- R7：首跑 pending 的起点可重放 ----
+
+# R7a：整段 pending 的序列不再把起点写进运行记录——9-08 的请求只剩「昨天」，8 月永远丢了。
+mutate "Q45-R7a pending 起点持久化（删掉 pending_since 记录）" "$DATA/daily.py" \
+  'log.pending_since.append(=>>(lambda _entry: None)(' \
+  packages/data/tests/test_first_run_pending.py::test_a_first_run_pending_start_is_persisted_and_picked_up_after_the_release
+
+# R7b：记了但不用——增量起点不看未消化的 pending 起点。
+mutate "Q45-R7b --since-last 从 min(水位线次日, pending 起点) 起" "$DATA/incremental.py" \
+  'starts = [d for d in pending_since if mark_day is None or d > mark_day]=>>starts = []' \
+  packages/data/tests/test_first_run_pending.py::test_a_first_run_pending_start_is_persisted_and_picked_up_after_the_release
+
+# R7c：水位线越过的 pending 起点没被当成已消化——每天回头重取 8 月。
+mutate "Q45-R7c 水位线越过即消化" "$DATA/incremental.py" \
+  'if mark_day is None or d > mark_day]=>>]' \
+  packages/data/tests/test_first_run_pending.py::test_a_digested_pending_start_is_not_requested_again
+
+# R7d：有未消化 pending 时源级 / 全局 coverage 报成 complete。
+mutate "Q45-R7d 未消化 pending → coverage=pending" "$DATA/report.py" \
+  'return COVERAGE_PENDING=>>return COVERAGE_COMPLETE' \
+  packages/data/tests/test_first_run_pending.py::test_a_first_run_pending_start_is_persisted_and_picked_up_after_the_release
+
+# ---- R8：部署 ----
+
+# R8a：磁盘守卫失效——剩 4 GB 照样开 batch。
+mutate "Q45-R8a 磁盘不足拒开 batch（删掉守卫）" "$DATA/daily.py" \
+  'if free >= min_free_bytes:=>>if True:' \
+  packages/data/tests/test_run_guards.py::test_low_disk_refuses_to_start_a_batch_and_reports_failed_with_the_reason
+
+# R8b：被拦下的运行（pull_failed / disk_low）coverage 不再强制 failed。
+mutate "Q45-R8b 被拦下的运行 coverage=failed" "$DATA/report.py" \
+  'if aborted:=>>if False:' \
+  packages/data/tests/test_run_guards.py::test_record_abort_leaves_a_failed_report_and_run_log_without_touching_the_lake
+
+# R8c：`--root …/data` 被当成父目录用——写出 data/data/。
+mutate "Q45-R8c --root 数据目录本身不写出 data/data" "$DATA/cli.py" \
+  'return path.parent=>>return path' \
+  packages/data/tests/test_run_guards.py::test_root_through_a_symlinked_data_dir_writes_into_the_link_target
+
+# R8d：运行前不拉代码。
+mutate "Q45-R8d unit 运行前 git pull --ff-only" "systemd/user/quantime-ingest@.service" \
+  'ExecStartPre=+/usr/bin/git -C /home/workspace/quantime pull --ff-only=>>' \
+  tests/test_systemd_units.py::test_the_ingest_service_pulls_fast_forward_only_before_running
+
+# R8e：ExecStopPost 不看 EXIT_CODE——摄取自己失败也被记成 pull_failed。
+mutate "Q45-R8e pull_failed 只在主进程没跑时记" "systemd/user/quantime-ingest@.service" \
+  '&& [ -z "$${EXIT_CODE:-}" ]=>>' \
+  tests/test_systemd_units.py::test_exec_stop_post_records_pull_failed_only_when_the_main_process_never_ran
+
+# R8f：常驻检出变成可写。
+mutate "Q45-R8f ReadWritePaths 只含数据根" "systemd/user/quantime-ingest@.service" \
+  'ReadWritePaths=/home/workspace/quantime/data=>>ReadWritePaths=/home/workspace/quantime' \
+  tests/test_systemd_units.py::test_the_resident_checkout_is_read_only_and_only_the_data_root_is_writable
+
 mutate "Q45-d unit 文件注入主网 host 字面量" "systemd/user/quantime-ingest@.service" \
   '[Service]=>>[Service]
 Environment=QUANTIME_UPSTREAM=https://api.binance.com' \

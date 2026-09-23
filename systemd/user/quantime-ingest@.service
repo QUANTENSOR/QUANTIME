@@ -12,26 +12,66 @@
 Description=quantime 每日增量摄取（源 %i）
 Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INSTALL.md
 # 等网络就绪再跑：没网时每条序列都会退避到重试上限才失败，白白占满重试预算。
-# 真没跑成也不丢数据——下一次运行按水位线从断点续取（见 ExecStart 注释）。
+# 真没跑成也不丢数据——下一次运行按水位线 / pending 起点从断点续取（见 ExecStart 注释）。
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/quantime
+# 常驻检出（owner 05:37 裁决）。路径写死而不是 %h：它不在本用户的家目录下。
+WorkingDirectory=/home/workspace/quantime
+
+# 数据根（R8）：QNT-45 / QNT-47 / QNT-55 统一 `--root /home/workspace/quantime/data`，这里用
+# 环境变量给 CLI（`--root` 缺省取它），ExecStart 与 ExecStopPost 不再各写一遍路径。
+# 它是软链接（→ 本机另一处目录）；ReadWritePaths 同样按软链接目标生效。
+# 这几条 Environment= 都不是凭据（守卫只放行下面这份键名清单，见 tests/test_systemd_units.py）。
+Environment=QUANTIME_DATA_ROOT=/home/workspace/quantime/data
+# 常驻检出只读：Python 不往检出里写 __pycache__；uv 的缓存放 PrivateTmp 给的私有 /tmp。
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=UV_CACHE_DIR=/tmp/uv-cache
+
+# 每次运行前把常驻检出快进到 origin（owner 05:37 裁决）。`--ff-only`：本地若有分叉就失败，
+# 绝不合并、绝不改写。失败 → 这一步非零 → systemd 不启动 ExecStart（**不摄取**），unit
+# 结果为 failed（非零），随后照常执行 ExecStopPost，由它记一笔 `pull_failed`（见下）。
+#
+# `+` 前缀：只有**这一条**命令不受下面的沙箱约束。拉代码必须写检出里的 .git 与工作树、
+# 必须出网，而沙箱里 ReadWritePaths 只含数据根——把检出也加进去等于让摄取进程可以改
+# 代码。所以宁可让一条字面量固定、不带任何变量的 git 命令出沙箱，也不放宽摄取进程的
+# 写权限（静态守卫钉住：出沙箱的只能是这一条）。user unit 里 `+` 不提权，仍是本用户。
+ExecStartPre=+/usr/bin/git -C /home/workspace/quantime pull --ff-only
 
 # `--since-last` 是这张卡的核心：区间起点**只**按已提交 ingestion_batch 的水位线推算
 # （水位线次日），每天只取新增的那一段。**故意不传 `--start`**：关机一周后 timer 只补跑
 # 一次（Persistent=true 只重放一次错过的触发），若起点钉死在「昨天」，那一次只会取
 # 昨天，中间六天永远是洞。从水位线续取，这一次就把六天全取回来（QNT-45 R3）。
-# 没有水位线（首跑）时起点 = `--end`，即只取昨日；历史回填另行手动跑。
+# 没有水位线（首跑）时起点 = `--end`，即只取昨日；历史回填另行手动跑。首跑若整段待上游
+# 发布（funding 月档），起点记进运行记录 `pending_since`，之后从
+# `min(水位线次日, 未消化的 pending 起点)` 续取，月档发布后真正落成 batch（QNT-45 R7）。
 # `--end` 取 UTC 昨日——日档次日才发布，当日的取了必然 404。
+#
+# `--no-sync --offline`：只用 owner 装好的环境（INSTALL.md 第 0 节 `uv sync`），不解析依赖、
+# 不写 .venv——常驻检出里除 data/ 外一个字节都不写（R8）。
+# `--min-free-gb 5`：数据根所在文件系统剩余不足 5 GB 就不开新 batch，run_log 记 `disk_low`、
+# 报告 coverage=failed 写明原因（R8；默认值同为 5，这里写出来便于 owner 改）。
 ExecStart=/usr/bin/env sh -c '\
-  cd "%h/quantime" && \
-  exec uv run --package quantime-data --extra ingest quantime-ingest \
-    --root "%h/quantime" --source %i \
-    daily --since-last \
+  exec uv run --no-sync --offline --package quantime-data quantime-ingest \
+    --source %i \
+    daily --since-last --min-free-gb 5 \
     --end "$(date -u -d "yesterday" +%%Y-%%m-%%d)"'
+
+# 拉代码失败的记录（R8）：选 ExecStopPost 而不是 OnFailure=——OnFailure 要另写一个 unit，
+# 而且分不清「pull 失败」与「摄取本身失败」。ExecStopPost 无论成败都会执行，环境里有
+# `$SERVICE_RESULT` 与 `$EXIT_CODE`；systemd 只在**主进程**（ExecStart）跑过时才设
+# `$EXIT_CODE`。所以「结果不是 success 且没有 EXIT_CODE」= 主进程根本没启动 = 前置步骤
+# （git pull）失败或超时——此时记一笔 `record-abort --reason pull_failed`：运行记录 +
+# coverage=failed 的报告，退出码 1。摄取自己的失败已由 daily 自己记，这里不重复。
+# `$$`：交给 sh 展开，而不是被 systemd 在启动命令前替换掉。
+ExecStopPost=/usr/bin/env sh -c '\
+  if [ "$${SERVICE_RESULT}" != success ] && [ -z "$${EXIT_CODE:-}" ]; then \
+    exec uv run --no-sync --offline --package quantime-data quantime-ingest \
+      --source %i record-abort --reason pull_failed \
+      --detail "git pull --ff-only 失败或超时（SERVICE_RESULT=$${SERVICE_RESULT}），本次未摄取"; \
+  fi'
 
 # 摄取是 I/O 密集且要让路给交互：低优先级，不和 owner 抢机器。
 Nice=10
@@ -45,12 +85,15 @@ TimeoutStartSec=3600
 # 故障以更高频率重放。失败留给 timer 的下一次触发，或 owner 看报告后手动补采。
 Restart=no
 
-# 沙箱：摄取只需要读代码、写 %h/quantime/data。其余一律不给。
+# 沙箱：摄取只需要读代码、写数据根。其余一律不给（ExecStartPre 的 `+` 那一条除外，见上）。
+# ProtectHome=read-only 覆盖整个 /home（含常驻检出与它 .git），ReadOnlyPaths 再把检出显式
+# 钉成只读；ReadWritePaths **只含**数据根——常驻检出只读，data/ 是唯一例外（R8）。
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/quantime/data
+ReadOnlyPaths=/home/workspace/quantime
+ReadWritePaths=/home/workspace/quantime/data
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -70,7 +113,7 @@ SyslogIdentifier=quantime-ingest-%i
 # 将来接入付费源时按这个形状写，凭据只存在于子进程环境里，不落盘、不进 unit：
 #
 #   ExecStartPre=/usr/bin/op signin --account <account>
-#   ExecStart=/usr/bin/op run --env-file=%h/quantime/.env.tpl -- \
+#   ExecStart=/usr/bin/op run --env-file=/home/workspace/quantime/.env.tpl -- \
 #       uv run --package quantime-data --extra ingest quantime-ingest ...
 #
 # `.env.tpl` 只含 `op://quant-dev/<item>/credential` 引用（仓库只跟踪 *.tpl，

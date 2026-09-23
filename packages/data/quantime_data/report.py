@@ -6,7 +6,7 @@
 
 报告内容按卡要求：分源覆盖率、新增行数、缺口、重复、重试次数、耗时。
 
-**schema v2（QNT-45 R4/R5）**：失败的序列同样进 `series`（`status="failed"`，带错误分类、
+**schema v2（QNT-45 R4/R5）起**：失败的序列同样进 `series`（`status="failed"`，带错误分类、
 尝试次数、耗时与**结构化的缺档清单**），补采因此能从报告重建任务，不必去翻运行记录。
 覆盖状态的取值与聚合规则写死在这里，不留给读侧解释：
 
@@ -16,10 +16,21 @@
 | `failed`：未提交任何 batch | `failed` | 是 |
 | `pending`：请求区间内上游**尚未发布**任何归档 | `pending` | **否** |
 
-分源 / 全局覆盖：分母为空 → `partial`；任一 `failed` → **`failed`**；否则任一 `partial` →
-`partial`；否则 `complete`。「有序列失败」永远不会显示成 `complete`。
-`pending_upstream`（按发布节奏尚未发布的日期段）不是缺失、不是失败，也不拉低覆盖率——
-它会被下一次 `--since-last` 取回。
+**schema v3（QNT-45 R7/R8）**在 v2 之上加：顶层 `abort_reason`（`pull_failed` / `disk_low` /
+`null`）、`mode="aborted"`（运行在摄取前被拦下）、整体 / 分源 coverage 多一个取值 `pending`。
+`load_report` 只认当前版本——v2 报告要按 v2 的代码读（系统尚未上线，湖里没有 v2 报告）。
+
+分源 / 全局覆盖：
+
+1. 运行在摄取前被拦下（`abort_reason` = `pull_failed` / `disk_low`）→ **`failed`**；
+2. 任一序列 `failed` → **`failed`**；
+3. 否则任一 `partial` → `partial`；
+4. 否则有**未消化的 pending**（某条序列整段待发布，或 `pending_upstream` 非空）→
+   **`pending`**——funding 等上游月档时，别的序列全成功也不许整源显示 `complete`（R7）；
+5. 否则分母非空 → `complete`；一条序列都没有 → `partial`。
+
+`pending_upstream`（按发布节奏尚未发布的日期段）不是缺失、不是失败，不进覆盖率**分母**；
+它由之后的 `--since-last` 取回（起点持久化在运行记录 `pending_since`，见 `incremental`）。
 
 报告文件本身不入库（`/data/` 是 gitignored），所以测试钉的是 **schema 与生成器**：
 字段齐全、Markdown 与 JSON 同源、同样输入逐字节相同。写入同样走 `parquet_io.publish_*`
@@ -44,7 +55,7 @@ from .batches import publish_staging
 REPORTS_RELDIR = "data/reports"
 
 #: JSON 报告的 schema 版本。补采读它之前先核对，版本不认识就拒绝而不是猜字段。
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 
 #: 序列状态（见模块头的表）。
 STATUS_OK = "ok"
@@ -266,16 +277,20 @@ def series_from_audit(
     )
 
 
-def aggregate_coverage(entries) -> str:
-    """覆盖聚合（规则见模块头）：分母空 → partial；任一 failed → failed；任一 partial → partial。"""
+def aggregate_coverage(entries, *, aborted: bool = False) -> str:
+    """覆盖聚合（规则见模块头，按顺序）：拦下/failed → failed；partial → partial；
+    未消化 pending → pending；分母非空 → complete；什么都没有 → partial。"""
+    entries = list(entries)
+    if aborted:
+        return COVERAGE_FAILED
     counted = [s for s in entries if s.counted]
-    if not counted:
-        return COVERAGE_PARTIAL
     if any(s.coverage == COVERAGE_FAILED for s in counted):
         return COVERAGE_FAILED
-    if all(s.coverage == COVERAGE_COMPLETE for s in counted):
-        return COVERAGE_COMPLETE
-    return COVERAGE_PARTIAL
+    if any(s.coverage != COVERAGE_COMPLETE for s in counted):
+        return COVERAGE_PARTIAL
+    if any(not s.counted or s.pending_upstream for s in entries):
+        return COVERAGE_PENDING
+    return COVERAGE_COMPLETE if counted else COVERAGE_PARTIAL
 
 
 @dataclass(slots=True)
@@ -289,6 +304,8 @@ class DailyReport:
     series: list[SeriesReport] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     elapsed_seconds: float = 0.0
+    #: 运行在摄取前被拦下的原因（`pull_failed` / `disk_low`，R8）；`None` = 正常跑完。
+    abort_reason: str | None = None
 
     def add(self, entry: SeriesReport) -> None:
         self.series.append(entry)
@@ -299,7 +316,9 @@ class DailyReport:
 
     def coverage_of(self, source: str) -> str:
         """该源的整体覆盖（聚合规则见 `aggregate_coverage`，宁严勿松）。"""
-        return aggregate_coverage(s for s in self.series if s.source == source)
+        return aggregate_coverage(
+            (s for s in self.series if s.source == source), aborted=self.abort_reason is not None
+        )
 
     @property
     def coverage(self) -> str:
@@ -308,7 +327,7 @@ class DailyReport:
         分母为空时判 `partial`：一次什么都没核查的运行不能算「覆盖完整」，
         否则清单配错导致 0 个标的被摄取时，报告反而天天显示绿。任一序列失败即 `failed`。
         """
-        return aggregate_coverage(self.series)
+        return aggregate_coverage(self.series, aborted=self.abort_reason is not None)
 
     @property
     def total_rows(self) -> int:
@@ -345,6 +364,7 @@ class DailyReport:
             "generated_at": self.generated_at.isoformat(),
             "mode": self.mode,
             "coverage": self.coverage,
+            "abort_reason": self.abort_reason,
             "sources": [{"source": s, "coverage": self.coverage_of(s)} for s in self.sources],
             "totals": {
                 "series": len(self.series),
@@ -377,11 +397,12 @@ class DailyReport:
             f"- 模式: `{self.mode}`",
             f"- 生成时刻: {self.generated_at.isoformat()}",
             f"- 整体覆盖: **{self.coverage}**",
+            *([f"- **本次运行被拦下: `{self.abort_reason}`**"] if self.abort_reason else []),
             f"- 序列数: {totals['series']}｜新增行数: {totals['rows']}"
             f"｜缺口: {totals['gaps']}｜重复: {totals['duplicates']}",
             f"- 上游整档缺失: {totals['missing_upstream']}｜重试次数: {totals['retries']}"
             f"｜失败: {totals['failures']}｜耗时: {totals['elapsed_seconds']}s",
-            f"- 上游尚未发布（不计入覆盖率）: {totals['pending_upstream_days']} 天"
+            f"- 上游尚未发布（不进分母，但整体不算 complete）: {totals['pending_upstream_days']} 天"
             f"｜整段待发布序列: {totals['pending_series']}",
             "",
             "## 分源覆盖",
@@ -469,7 +490,7 @@ def summarize_reports(root: str | os.PathLike[str], report_date: dt.date) -> tup
     """当天所有报告的汇总行（`report-summary` 子命令与汇总 unit 用）。回传 `(行, 退出码)`。
 
     **按 JSON 字段读**（`load_report` 核对版本后取 `coverage` / `totals`），不 grep 文本：
-    schema v2 里 `"coverage"` 键在每条序列里也出现，grep 第一处匹配拿到的可能是某一条
+    schema v2 起 `"coverage"` 键在每条序列里也出现，grep 第一处匹配拿到的可能是某一条
     序列的覆盖，而不是整份报告的（QNT-45 R4）。退出码：无报告或任一份不是 `complete` → 1。
     """
     d = report_dir(root, report_date)
@@ -482,8 +503,9 @@ def summarize_reports(root: str | os.PathLike[str], report_date: dt.date) -> tup
         data = load_report(path)
         totals = data["totals"]
         coverage = data["coverage"]
+        abort = f" abort_reason={data['abort_reason']}" if data.get("abort_reason") else ""
         lines.append(
-            f"{path.name} mode={data['mode']} coverage={coverage} "
+            f"{path.name} mode={data['mode']} coverage={coverage}{abort} "
             f"series={totals['series']} failed_series={totals['failed_series']} "
             f"pending_series={totals['pending_series']} rows={totals['rows']} "
             f"missing={totals['missing_upstream']} retries={totals['retries']} "

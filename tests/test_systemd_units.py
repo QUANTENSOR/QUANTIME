@@ -6,7 +6,9 @@ unit 文件不参与 pytest 的 import，也不被 ruff 检查——它是这个
 
 * 不得出现主网 / 交易所下单 host 字面量（crypto-boundaries ②、ADR-0001 D1.8）；
 * 不得出现任何凭据字面量或明文凭据注入（AGENTS.md §3）；
-* `systemd-analyze verify` 必须通过（无 root，对文件运行）。
+* `systemd-analyze verify` 必须通过（无 root，对文件运行）；
+* 部署约束（R8）：常驻检出 `/home/workspace/quantime` 只读、数据根是唯一可写处；每次运行前
+  `git pull --ff-only`，失败不摄取且由 `ExecStopPost` 记 `pull_failed`。
 
 `systemd-analyze` 不在时相关测试 skip——CI 的 ubuntu runner 有，本地容器不一定有。
 """
@@ -44,6 +46,44 @@ SECRET_PATTERN = (
 )
 
 
+#: 常驻检出与数据根（owner 2026-09-23 05:37 裁决）。
+CHECKOUT = "/home/workspace/quantime"
+DATA_ROOT = "/home/workspace/quantime/data"
+
+#: `Environment=` 只许这几个键，且值固定——它们都不是凭据。其余任何键（尤其任何形似
+#: `*_KEY` / `*_TOKEN` 的）一律拒绝：凭据只经 op 注入子进程，不进 unit。
+ALLOWED_ENVIRONMENT: dict[str, str] = {
+    "QUANTIME_DATA_ROOT": DATA_ROOT,
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "UV_CACHE_DIR": "/tmp/uv-cache",
+}
+SERVICES = ("quantime-ingest@.service", "quantime-ingest-report.service")
+
+
+def directives(name: str, key: str) -> list[str]:
+    """某个指令的全部取值（整行注释已去掉；续行不展开——需要的调用方自己拼）。"""
+    prefix = f"{key}="
+    return [ln[len(prefix) :] for ln in uncommented_lines(unit_text(name)) if ln.startswith(prefix)]
+
+
+def command_block(name: str, key: str) -> str:
+    """把 `Key=... <反斜杠>` 续行拼回一条完整命令：与 systemd 一样去掉行尾反斜杠、以空格相接。"""
+    lines = uncommented_lines(unit_text(name))
+    out: list[str] = []
+    grabbing = False
+    for ln in lines:
+        if ln.startswith(f"{key}="):
+            grabbing = True
+            ln = ln[len(key) + 1 :]
+        elif not grabbing:
+            continue
+        cont = ln.rstrip().endswith("\\")
+        out.append(ln.rstrip().removesuffix("\\"))
+        if not cont:
+            break
+    return " ".join(out)
+
+
 def unit_text(name: str) -> str:
     return (UNIT_DIR / name).read_text(encoding="utf-8")
 
@@ -56,7 +96,14 @@ def uncommented_lines(text: str) -> list[str]:
 def _looks_like_a_secret_blob(line: str) -> bool:
     if re.search(r"https?://", line):
         return False
-    return any(len(tok) >= 40 for tok in re.split(r"[^A-Za-z0-9+/=]+", line))
+    # 先去掉 `Key=`：否则 `WorkingDirectory=/home/…` 会因 `=` 与 `/` 都在 base64 字符集里
+    # 被拼成一个长 token。绝对路径按段量——手抄的 key 塞进路径里，那一段照样 ≥ 40。
+    value = re.sub(r"^\s*[A-Za-z]+=", "", line)
+    for tok in re.split(r"[^A-Za-z0-9+/=]+", value):
+        parts = tok.split("/") if tok.startswith("/") else [tok]
+        if any(len(part) >= 40 for part in parts):
+            return True
+    return False
 
 
 def test_every_declared_unit_file_exists():
@@ -89,10 +136,17 @@ def test_unit_files_carry_no_credentials(name):
     secrets = [ln for ln in lines if re.search(SECRET_PATTERN, ln)]
     assert secrets == [], f"{name} 疑似含明文凭据:\n" + "\n".join(secrets)
 
-    env = [ln for ln in lines if ln.strip().startswith(("Environment=", "EnvironmentFile="))]
-    assert env == [], (
-        f"{name} 用 Environment/EnvironmentFile 传值（凭据须经 op 注入）:\n" + "\n".join(env)
+    env_file = [ln for ln in lines if ln.strip().startswith("EnvironmentFile=")]
+    assert env_file == [], f"{name} 用 EnvironmentFile 传值（凭据须经 op 注入）:\n" + "\n".join(
+        env_file
     )
+    for ln in lines:
+        if not ln.strip().startswith("Environment="):
+            continue
+        key, _, value = ln.strip().removeprefix("Environment=").partition("=")
+        assert ALLOWED_ENVIRONMENT.get(key) == value, (
+            f"{name} 的 Environment= 不在白名单（凭据须经 op 注入，不进 unit）: {ln}"
+        )
 
     # 40 字符以上的连续 base64/hex 样串——手抄的 key 长这样。URL 行先排除：
     # 文档链接天然很长，把它算成"疑似秘钥"会让这条守卫被当成噪声关掉。
@@ -162,6 +216,103 @@ def test_the_report_service_neither_writes_nor_goes_online():
     assert "ReadWritePaths=" not in "\n".join(uncommented_lines(text)), "报告汇总不该有任何写权限"
 
 
+# ---- R8：部署约束 ----
+
+
+def test_both_services_run_in_the_resident_checkout_with_one_data_root():
+    """数据根统一（R8）：两个 service 都经 `QUANTIME_DATA_ROOT` 指到同一处，不再各写 `--root`。"""
+    for name in SERVICES:
+        assert directives(name, "WorkingDirectory") == [CHECKOUT], name
+        assert f"QUANTIME_DATA_ROOT={DATA_ROOT}" in directives(name, "Environment"), name
+        live = "\n".join(uncommented_lines(unit_text(name)))
+        assert "--root" not in live, f"{name} 又在命令行里写 --root（与环境变量两处真相）"
+        assert "%h/quantime" not in live, f"{name} 还指着旧路径 ~/quantime"
+
+
+def test_the_ingest_service_pulls_fast_forward_only_before_running():
+    """每次运行前 `git -C <检出> pull --ff-only`；它是唯一一条出沙箱（`+`）的命令。"""
+    name = "quantime-ingest@.service"
+    assert directives(name, "ExecStartPre") == [f"+/usr/bin/git -C {CHECKOUT} pull --ff-only"]
+    for key in ("ExecStart", "ExecStopPost"):
+        (value,) = directives(name, key)
+        assert not value.startswith(("+", "!", "-", "@", ":")), f"{key} 不许带特权/忽略前缀"
+    assert directives(name, "OnFailure") == [], "pull_failed 由 ExecStopPost 记，不另挂 unit"
+    # ExecStart 只用装好的环境：不 sync（不写检出里的 .venv）、不出网解析依赖。
+    assert "--no-sync" in command_block(name, "ExecStart")
+    assert "--offline" in command_block(name, "ExecStart")
+
+
+def test_the_ingest_service_guards_disk_space_explicitly():
+    assert "--min-free-gb 5" in command_block("quantime-ingest@.service", "ExecStart")
+
+
+def test_the_resident_checkout_is_read_only_and_only_the_data_root_is_writable():
+    """常驻检出只读，data/ 是唯一例外（owner 裁决）：ReadWritePaths 恰好只有数据根。"""
+    name = "quantime-ingest@.service"
+    assert directives(name, "ReadWritePaths") == [DATA_ROOT]
+    assert directives(name, "ProtectHome") == ["read-only"]
+    assert directives(name, "ProtectSystem") == ["strict"]
+    assert directives(name, "ReadOnlyPaths") == [CHECKOUT]
+    for key in ("BindPaths", "PrivateUsers", "DynamicUser"):
+        assert directives(name, key) == [], f"{name} 出现 {key}=（会改变上面的只读判定）"
+
+
+def _systemd_to_sh(block: str) -> str:
+    """把 unit 里的 `sh -c '...'` 取出来，按 systemd 的规则替换 `$$` 与 `%i`。"""
+    script = block.split("sh -c '", 1)[1].rsplit("'", 1)[0]
+    return script.replace("$$", "$").replace("%i", "binance_vision")
+
+
+@pytest.mark.parametrize(
+    ("env", "records"),
+    [
+        ({"SERVICE_RESULT": "exit-code"}, True),  # ExecStartPre（git pull）失败：主进程没跑
+        ({"SERVICE_RESULT": "timeout"}, True),  # pull 卡住超时
+        ({"SERVICE_RESULT": "exit-code", "EXIT_CODE": "exited", "EXIT_STATUS": "1"}, False),
+        ({"SERVICE_RESULT": "success", "EXIT_CODE": "exited", "EXIT_STATUS": "0"}, False),
+    ],
+)
+def test_exec_stop_post_records_pull_failed_only_when_the_main_process_never_ran(
+    tmp_path, env, records
+):
+    """真跑一遍 ExecStopPost 的脚本（`uv` 换成记录参数的桩）。
+
+    systemd 只在主进程跑过时设 `$EXIT_CODE`；ExecStartPre 失败时 ExecStart 不启动，
+    结果非 success 且无 `$EXIT_CODE` → 记 `pull_failed`。摄取自己失败时 daily 已记过，不重复。
+    """
+    stub = tmp_path / "uv"
+    calls = tmp_path / "calls"
+    stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {calls}\n', encoding="utf-8")
+    stub.chmod(0o755)
+    script = _systemd_to_sh(command_block("quantime-ingest@.service", "ExecStopPost"))
+    proc = subprocess.run(
+        ["/bin/sh", "-c", script],
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin", **env},
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    if not records:
+        assert not calls.exists(), "摄取本身的失败 / 成功被误记成 pull_failed"
+        return
+    argv = calls.read_text(encoding="utf-8").splitlines()
+    assert argv[:5] == ["run", "--no-sync", "--offline", "--package", "quantime-data"]
+    joined = " ".join(argv)
+    assert "record-abort --reason pull_failed" in joined
+    assert "--source binance_vision" in joined
+    assert env["SERVICE_RESULT"] in joined
+
+
+def test_package_code_never_names_the_resident_checkout():
+    """代码不写死常驻检出路径：写到哪只由 `--root` / `QUANTIME_DATA_ROOT` 决定（R8）。"""
+    hits = [
+        str(p.relative_to(REPO))
+        for p in (REPO / "packages").rglob("*.py")
+        if "/tests/" not in str(p) and "/home/workspace" in p.read_text(encoding="utf-8")
+    ]
+    assert hits == [], f"包代码写死了常驻检出路径: {hits}"
+
+
 @pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="无 systemd-analyze")
 def test_systemd_analyze_verify_passes_on_every_unit():
     """`systemd-analyze verify`（无 root，对文件运行）必须通过。
@@ -175,6 +326,26 @@ def test_systemd_analyze_verify_passes_on_every_unit():
         capture_output=True,
         text=True,
     )
+    assert proc.returncode == 0, f"systemd-analyze verify 失败:\n{proc.stdout}\n{proc.stderr}"
+
+
+@pytest.mark.skipif(shutil.which("systemd-analyze") is None, reason="无 systemd-analyze")
+def test_systemd_analyze_verify_passes_on_the_binance_vision_instances(tmp_path):
+    """模板实例化之后（`%i` = binance_vision）同样通过。"""
+    for suffix in ("service", "timer"):
+        src = UNIT_DIR / f"quantime-ingest@.{suffix}"
+        (tmp_path / f"quantime-ingest@binance_vision.{suffix}").write_text(
+            src.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    proc = subprocess.run(
+        [
+            "systemd-analyze", "verify", "--user",
+            "./quantime-ingest@binance_vision.service", "./quantime-ingest@binance_vision.timer",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )  # fmt: skip
     assert proc.returncode == 0, f"systemd-analyze verify 失败:\n{proc.stdout}\n{proc.stderr}"
 
 
@@ -206,6 +377,31 @@ def test_install_md_lists_the_owner_executed_commands():
         assert needle in text, f"INSTALL.md 缺少 {needle!r}"
     assert "由 owner 回来后逐项执行" in text, "INSTALL.md 未声明由 owner 执行"
     assert "不得在主机上执行" in text, "INSTALL.md 未声明本卡不在主机上执行"
+
+
+def test_install_md_documents_the_r8_deployment_choices():
+    """R8：数据根、pull_failed 的记录方式、磁盘守卫、需 root 的步骤单列。"""
+    text = (UNIT_DIR / "INSTALL.md").read_text(encoding="utf-8")
+    for needle in (
+        f"QUANTIME_DATA_ROOT={DATA_ROOT}",
+        f"--root {DATA_ROOT}",
+        "git -C /home/workspace/quantime pull --ff-only",
+        "ExecStopPost",
+        "pull_failed",
+        "disk_low",
+        "--min-free-gb",
+        "owner 回来执行",
+        "pending_since",
+    ):
+        assert needle in text, f"INSTALL.md 缺少 {needle!r}"
+    assert "~/quantime" not in text, "INSTALL.md 还指着旧路径 ~/quantime"
+
+
+def test_install_md_does_not_ask_for_a_hand_made_funding_watermark():
+    """R7：首跑 pending 由 `pending_since` 接住，不许靠手工回填 / 预热去「建立水位线」。"""
+    text = (UNIT_DIR / "INSTALL.md").read_text(encoding="utf-8")
+    for forbidden in ("预热", "建立水位线", "自然取回"):
+        assert forbidden not in text, f"INSTALL.md 出现 {forbidden!r}"
 
 
 def test_install_md_documents_no_plaintext_credentials():

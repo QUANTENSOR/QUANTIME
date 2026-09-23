@@ -5,8 +5,9 @@
 `partial`——而那几天的数据其实早就以日档的形式在上游了。
 
 funding 没有日档（2026-09-23 对一个 daily fundingRate URL 做了一次 allowlist 内 GET，404），
-所以月档发布前的那段是 `pending_upstream`：不是缺失、不是失败、不进覆盖率分母，
-下一次 `--since-last` 在月档发布后自然取回。
+所以月档发布前的那段是 `pending_upstream`：不是缺失、不是失败、不进覆盖率分母——但整体
+覆盖是 `pending` 而不是 `complete`（R7）。它的起点记进运行记录 `pending_since`，月档发布后
+的 `--since-last` 从那里取回（没有水位线的首跑也一样，见 `test_first_run_pending.py`）。
 
 全部离线：日档用测试内合成的 zip（`fixture_source.synthetic_daily_kline`）。
 """
@@ -196,18 +197,35 @@ def test_a_run_before_the_monthly_release_fetches_daily_archives_and_parks_fundi
     assert (k.status, k.coverage, k.rows) == ("ok", "complete", 7)
     assert (f.status, f.coverage) == ("pending", "pending")
     assert f.pending_upstream == ((D(2026, 8, 1), D(2026, 8, 31)),)
-    assert out.report.coverage == "complete"  # pending 不进分母
+    assert out.report.coverage == "pending"  # pending 不进分母，但有未消化 pending 就不是 complete
     data = report.load_report(report.report_paths(root, out.report)[0])
     assert data["totals"]["pending_upstream_days"] == 31
     assert data["totals"]["failures"] == 0 and data["totals"]["missing_upstream"] == 0
     assert out.log.series[1].action == "pending_upstream"
 
 
+def funding_requested_on(day: dt.date) -> IngestSpec:
+    """CLI 的 `daily --since-last --end yesterday`（不带 `--start`）在 `day` 当天发出的请求。"""
+    yesterday = day - dt.timedelta(days=1)
+    return perp(DataType.FUNDING, Freq.EVENT, yesterday, yesterday)
+
+
 def test_pending_days_are_picked_up_by_the_next_since_last_after_the_release(root):
+    """请求跟着请求日走（R7 修正）：9-01 的请求只有 8-31，9-08 的请求只有 9-07。
+
+    9-01 那次整段 pending，起点 8-31 记进运行记录；9-08 的 `--since-last` 从 8-31 起，
+    8 月月档已发布 → 落成 batch，水位线到 8-31；9 月的日子仍 pending。
+    """
     early = dt.datetime(2026, 9, 1, 3, tzinfo=dt.UTC)
-    _run(root, [FUNDING_SPEC], ScriptedFetcher(), early, since_last=True)
+    spec = funding_requested_on(early.date())
+    first = _run(root, [spec], ScriptedFetcher(), early, since_last=True)
+    assert first.log.pending_since[0].since == D(2026, 8, 31)
+    assert first.report.coverage == "pending"
     later = dt.datetime(2026, 9, 8, 3, tzinfo=dt.UTC)  # 9-07 是 9 月第一个周一
-    out = _run(root, [FUNDING_SPEC], ScriptedFetcher(), later, since_last=True)
+    fetch = ScriptedFetcher()
+    out = _run(root, [funding_requested_on(later.date())], fetch, later, since_last=True)
+    assert any(u.endswith("BTCUSDT-fundingRate-2026-08.zip") for u in fetch.urls)
     (series,) = out.report.series
-    assert (series.status, series.coverage) == ("ok", "complete")
-    assert series.rows > 0 and series.pending_upstream == ()
+    assert series.status == "ok" and series.rows > 0 and series.batch_id
+    assert series.pending_upstream == ((D(2026, 9, 1), D(2026, 9, 7)),)
+    assert out.report.coverage == "pending"  # 9 月那段还没消化
