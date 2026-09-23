@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 from pathlib import Path
 
@@ -15,6 +16,26 @@ from .runlog import ABORT_DISK_LOW
 
 #: 默认阈值：剩余不足 5 GB 就不开新 batch（owner 裁决 2026-09-23）。`None` = 关闭守卫。
 DEFAULT_MIN_FREE_BYTES = 5 * 1024**3
+
+
+class ThresholdError(ValueError):
+    """阈值配置错误（负数 / NaN / ±inf / 非数字）：进程拒绝启动，而不是当成「关闭守卫」。"""
+
+
+def parse_min_free_gb(text: str) -> int | None:
+    """阈值解析（R10）——`--min-free-gb` 与 `$QUANTIME_MIN_FREE_GB` 共用的**唯一实现**。
+
+    有限非负数才合法：`0` → `None`（关闭守卫）；正数 → 阈值字节数。
+    负数、NaN、±inf、非数字 → `ThresholdError`。此前 `value > 0 else None` 会把这些
+    全部静默当成「关闭」，一个写错的配置就能让守卫失效。
+    """
+    try:
+        value = float(text.strip())
+    except ValueError:
+        raise ThresholdError(f"不是数字: {text!r}（要有限非负数，GB；0 关闭守卫）") from None
+    if not math.isfinite(value) or value < 0:
+        raise ThresholdError(f"非法阈值: {text!r}（要有限非负数，GB；0 关闭守卫）")
+    return int(value * 1024**3) if value > 0 else None
 
 
 class DiskLowError(Exception):

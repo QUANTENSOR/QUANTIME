@@ -36,6 +36,30 @@ PY
   clean
 }
 
+# still_green <标签> <文件> <python 替换表达式> <pytest 选择器>：同一变异下这些测试必须**仍绿**
+# （证明上面变红的是被改坏的那一处，而不是测试本身对合法输入就不稳）。
+still_green() {
+  local label="$1" file="$2" expr="$3" target="$4"
+  cp "$file" "$file.mutbak"
+  python3 - "$file" "$expr" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); old, new = sys.argv[2].split("=>>", 1)
+s = p.read_text()
+assert old in s, f"变异锚点未找到: {old!r} in {p}"
+p.write_text(s.replace(old, new, 1))
+PY
+  clean
+  if uv run pytest "$target" -q >/dev/null 2>&1; then
+    echo "  ok    $label —— 变异下合法值测试仍绿"
+    PASS=$((PASS+1))
+  else
+    echo "  FAIL  $label —— 变异下合法值测试也红了（测试不针对被改的那一处）"
+    FAIL=$((FAIL+1))
+  fi
+  mv "$file.mutbak" "$file"
+  clean
+}
+
 CORE=packages/core/quantime_core
 DATA=packages/data/quantime_data
 
@@ -452,6 +476,25 @@ mutate "Q45-R8h ingest 也接受 --min-free-gb" "$DATA/cli.py" \
 =>>            )
 ' \
   packages/data/tests/test_run_guards.py::test_ingest_with_min_free_gb_zero_commits_even_when_the_disk_is_low
+
+# ---- R10：阈值解析 ----
+
+# Q45-R10：解析函数退回「`value > 0 else None`」——负数 / NaN / inf 被静默当成关闭守卫。
+# 非法值测试（三个写子命令 × 参数 / 环境变量）逐条变红；合法值测试保持绿。
+R10_EXPR='    if not math.isfinite(value) or value < 0:
+        raise=>>    if False:
+        raise'
+G=packages/data/tests/test_run_guards.py
+for cmd in ingest daily backfill; do
+  for bad in -1 nan inf; do
+    mutate "Q45-R10 阈值不校验 → flag[$cmd $bad]" "$DATA/diskguard.py" "$R10_EXPR" \
+      "$G::test_an_invalid_min_free_gb_flag_refuses_to_start[$cmd-$bad]"
+    mutate "Q45-R10 阈值不校验 → env[$cmd $bad]" "$DATA/diskguard.py" "$R10_EXPR" \
+      "$G::test_an_invalid_min_free_gb_env_refuses_to_start[$cmd-$bad]"
+  done
+done
+still_green "Q45-R10 阈值不校验 → 合法值 0 / 0.5 / 2 / 缺省 5" "$DATA/diskguard.py" "$R10_EXPR" \
+  "$G::test_valid_thresholds_behave_as_before"
 
 mutate "Q45-d unit 文件注入主网 host 字面量" "systemd/user/quantime-ingest@.service" \
   '[Service]=>>[Service]

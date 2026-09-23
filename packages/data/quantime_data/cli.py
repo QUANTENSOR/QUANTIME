@@ -47,7 +47,7 @@ from . import audit as audit_mod
 from . import daily as daily_mod
 from . import ingest as ingest_mod
 from .adapter import DEFAULT_SOURCE, adapter_names, get_adapter
-from .diskguard import DEFAULT_MIN_FREE_BYTES, DiskLowError
+from .diskguard import DEFAULT_MIN_FREE_BYTES, DiskLowError, ThresholdError, parse_min_free_gb
 from .retry import (
     DEFAULT_MAX_ATTEMPTS,
     DEFAULT_MAX_TOTAL_SECONDS,
@@ -313,28 +313,56 @@ def _add_retry_flags(p: argparse.ArgumentParser) -> None:
 #: 磁盘守卫阈值的环境变量（GB）：给 `--min-free-gb` 当缺省值；unit 里仍显式写 `--min-free-gb`。
 MIN_FREE_GB_ENV = "QUANTIME_MIN_FREE_GB"
 
+#: `--min-free-gb` 没给时的占位：`main` 在分派之前按环境变量 / 默认 5 GB 解析它。
+_MIN_FREE_UNSET = object()
 
-def _default_min_free_gb() -> float:
-    value = (os.environ.get(MIN_FREE_GB_ENV) or "").strip()
-    return float(value) if value else DEFAULT_MIN_FREE_BYTES / 1024**3
+
+def _min_free_gb_arg(text: str) -> int | None:
+    """argparse `type=`：非法值在参数解析阶段就报错（exit 2，stderr 带参数名）。"""
+    try:
+        return parse_min_free_gb(text)
+    except ThresholdError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
 
 
 def _add_disk_flag(p: argparse.ArgumentParser) -> None:
-    """磁盘守卫阈值（R8/R9）：`ingest` / `daily` / `backfill` 三个写子命令同一个参数、同一语义。
+    """磁盘守卫阈值（R8/R9/R10）：`ingest` / `daily` / `backfill` 三个写子命令同一个参数、同一语义。
 
-    守卫本身只在 `ingest.ingest_one` 开头一处（`diskguard.check_disk`），这里只传阈值。
-    缺省 5 GB（或 `$QUANTIME_MIN_FREE_GB`）；只有显式 `0` 关闭。
+    守卫本身只在 `ingest.ingest_one` 开头一处（`diskguard.check_disk`），这里只传阈值；
+    参数与环境变量共用 `diskguard.parse_min_free_gb` 一个解析函数。
     """
     p.add_argument(
         "--min-free-gb",
-        type=float,
-        default=_default_min_free_gb(),
-        help=f"数据根所在文件系统的最低剩余空间（GB，默认 5 或 ${MIN_FREE_GB_ENV}；0 关闭守卫）",
+        dest="min_free_bytes",
+        type=_min_free_gb_arg,
+        default=_MIN_FREE_UNSET,
+        help=(
+            f"数据根所在文件系统的最低剩余空间（GB，默认 5 或 ${MIN_FREE_GB_ENV}）。"
+            "0 关闭守卫；负数 / NaN / 非有限值 / 非数字为配置错误，进程拒绝启动"
+        ),
     )
 
 
+def _resolve_min_free(args) -> None:
+    """没给 `--min-free-gb` 时取环境变量（空串 = 未设置），再缺省 5 GB。
+
+    环境变量非法 → `ThresholdError`，不静默回落到 5：`main` 据此在任何磁盘检查、
+    请求、batch_id 登记之前以非零退出。
+    """
+    if getattr(args, "min_free_bytes", None) is not _MIN_FREE_UNSET:
+        return
+    raw = (os.environ.get(MIN_FREE_GB_ENV) or "").strip()
+    if not raw:
+        args.min_free_bytes = DEFAULT_MIN_FREE_BYTES
+        return
+    try:
+        args.min_free_bytes = parse_min_free_gb(raw)
+    except ThresholdError as exc:
+        raise ThresholdError(f"环境变量 {MIN_FREE_GB_ENV}: {exc}") from None
+
+
 def _min_free_bytes(args) -> int | None:
-    return int(args.min_free_gb * 1024**3) if args.min_free_gb > 0 else None
+    return args.min_free_bytes
 
 
 def _retry_policy(args) -> RetryPolicy:
@@ -580,6 +608,11 @@ def _run_report_summary(args) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     args.root = resolve_root(args.root)
+    try:
+        _resolve_min_free(args)
+    except ThresholdError as exc:
+        print(f"quantime-ingest: 配置错误: {exc}", file=sys.stderr)
+        return 2
     if args.command == "report-summary":
         return _run_report_summary(args)
     if args.command == "plan":

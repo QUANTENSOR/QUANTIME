@@ -306,3 +306,123 @@ def test_the_disk_guard_lives_in_exactly_one_place():
     assert measures == {"diskguard.py"}
     assert callers == {"ingest.py"}
     assert (pkg / "ingest.py").read_text("utf-8").count("    check_disk(root") == 1
+
+
+# ---- R10：阈值解析——负数 / NaN / 非有限值 / 非数字是配置错误，不是「关闭守卫」----
+
+WRITE_WINDOW = [
+    "--datatype", "kline", "--symbol", "BTCUSDT",
+    "--start", "2026-08-01", "--end", "2026-08-31", "--as-of", "2026-09-21",
+]  # fmt: skip
+BAD_THRESHOLDS = ["-1", "nan", "inf", "abc"]
+
+
+@pytest.fixture
+def write_cli(root, tmp_path, disk, monkeypatch, capsys):
+    """三个写子命令的离线 CLI；回传 `run(子命令, *额外参数) -> (退出码, stderr)` 与 fetch。
+
+    backfill 用的报告由一次被守卫拦下的 daily 生成（湖里没有 batch、报告列出全部缺档）。
+    """
+    fetch = FixtureFetcher()
+    monkeypatch.setattr(cli, "_http_opener", lambda: None)
+    monkeypatch.setattr(cli, "_fetcher", lambda transport: fetch)
+    monkeypatch.setattr(daily.time, "sleep", lambda s: None)
+    universe = tmp_path / "u.yaml"
+    universe.write_text("version: 1\nspot:\n  freqs: ['1d']\n  symbols: [BTCUSDT]\n")
+    disk["free"] = 1 * GB
+    seeded = _run(root, [spot_1d(D(2026, 8, 1), D(2026, 8, 31))])
+    report_json = str(report.report_paths(root, seeded.report)[0])
+    disk["paths"].clear()
+    capsys.readouterr()
+    sub = {
+        "ingest": ["ingest", *WRITE_WINDOW],
+        "daily": ["daily", *WRITE_WINDOW],
+        "backfill": ["backfill", "--from-report", report_json],
+    }
+
+    def run(command: str, *extra: str) -> tuple[int, str]:
+        argv = ["--root", str(root), "--universe", str(universe), *sub[command], *extra]
+        try:
+            code = cli.main(argv)
+        except SystemExit as exc:  # argparse `type=` 报错走这里（exit 2）
+            code = exc.code
+        return code, capsys.readouterr().err
+
+    return run, fetch
+
+
+def _nothing_happened(root, disk, fetch, before) -> None:
+    assert fetch.urls == [], "配置错误却发了请求"
+    assert disk["paths"] == [], "配置错误应在任何磁盘检查之前失败"
+    assert not _has_batches(root), "配置错误却开了 batch"
+    assert snapshot(root) == before, "配置错误却写了文件（run_log / 报告 / batch）"
+
+
+@pytest.mark.parametrize("bad", BAD_THRESHOLDS)
+@pytest.mark.parametrize("command", ["ingest", "daily", "backfill"])
+def test_an_invalid_min_free_gb_flag_refuses_to_start(root, disk, write_cli, command, bad):
+    run, fetch = write_cli
+    before = snapshot(root)
+    code, err = run(command, f"--min-free-gb={bad}")
+    assert code not in (0, None)
+    assert "--min-free-gb" in err
+    _nothing_happened(root, disk, fetch, before)
+
+
+@pytest.mark.parametrize("bad", BAD_THRESHOLDS)
+@pytest.mark.parametrize("command", ["ingest", "daily", "backfill"])
+def test_an_invalid_min_free_gb_env_refuses_to_start(
+    root, disk, write_cli, monkeypatch, command, bad
+):
+    """环境变量非法不静默回落到默认 5 GB——同样拒绝启动。"""
+    run, fetch = write_cli
+    monkeypatch.setenv(cli.MIN_FREE_GB_ENV, bad)
+    before = snapshot(root)
+    code, err = run(command)
+    assert code not in (0, None)
+    assert cli.MIN_FREE_GB_ENV in err
+    _nothing_happened(root, disk, fetch, before)
+
+
+@pytest.mark.parametrize("via", ["flag", "env"])
+@pytest.mark.parametrize(
+    ("threshold", "admitted"), [("0", True), ("0.5", True), ("2", False), (None, False)]
+)  # None = 缺省 5 GB（env 路径：空串 = 未设置；flag 路径：显式 5 压过 env 的 0）
+@pytest.mark.parametrize("command", ["ingest", "daily", "backfill"])
+def test_valid_thresholds_behave_as_before(
+    root, disk, write_cli, monkeypatch, command, threshold, admitted, via
+):
+    """合法值行为与 R9 一致：剩余 1 GiB 时，0（关闭）与 0.5 GB（1 GiB ≥ 0.5 GB）放行，
+    2 GB 与缺省 5 GB 拒绝（disk_low）。空环境变量 = 未设置 → 缺省 5。"""
+    run, fetch = write_cli
+    extra: list[str] = []
+    if threshold is None:
+        monkeypatch.setenv(cli.MIN_FREE_GB_ENV, "" if via == "env" else "0")
+        extra = [] if via == "env" else ["--min-free-gb", "5"]
+    elif via == "flag":
+        extra = ["--min-free-gb", threshold]
+    else:
+        monkeypatch.setenv(cli.MIN_FREE_GB_ENV, threshold)
+    code, _ = run(command, *extra)
+    if admitted:
+        assert code == 0 and fetch.urls and _has_batches(root)
+        assert bool(disk["paths"]) == (threshold != "0"), "只有 0 关闭守卫（不量磁盘）"
+    else:
+        assert code == 1 and fetch.urls == [] and not _has_batches(root)
+        assert disk["paths"], "被拦下的应当是磁盘守卫"
+        (log_path,) = sorted(
+            (root / "data" / "runs").glob("*/run_log.json"), key=lambda p: p.stat().st_mtime
+        )[-1:]
+        assert json.loads(log_path.read_text(encoding="utf-8"))["abort_reason"] == "disk_low"
+
+
+@pytest.mark.parametrize("bad", ["-1", "-0.5", "nan", "NaN", "inf", "-inf", "1e999", "abc", ""])
+def test_the_one_threshold_parser_rejects_everything_but_finite_non_negative(bad):
+    with pytest.raises(diskguard.ThresholdError):
+        diskguard.parse_min_free_gb(bad)
+
+
+def test_the_one_threshold_parser_accepts_zero_as_off_and_positive_as_bytes():
+    assert diskguard.parse_min_free_gb("0") is None
+    assert diskguard.parse_min_free_gb(" 0.5 ") == GB // 2
+    assert diskguard.parse_min_free_gb("5") == diskguard.DEFAULT_MIN_FREE_BYTES

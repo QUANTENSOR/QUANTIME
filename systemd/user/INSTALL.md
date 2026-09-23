@@ -22,7 +22,7 @@ QNT-47（Massive）/ QNT-48（Tushare Pro）接入时，除了 adapter 本身，
 | 运行前拉代码 | `ExecStartPre=+/usr/bin/git -C /home/workspace/quantime pull --ff-only`。`+` = 只有这一条不受沙箱约束（拉代码要写 `.git`、要出网；摄取进程本身仍只能写数据根） |
 | 拉代码失败 | ExecStart **不启动**（不摄取），unit 结果 failed（非零）。**选 `ExecStopPost` 记录**（不用 `OnFailure=`：那要另写一个 unit，且分不清 pull 失败与摄取失败）：结果非 `success` 且 `$EXIT_CODE` 为空（主进程没跑过）→ `quantime-ingest record-abort --reason pull_failed`，写一份运行记录（`abort_reason: pull_failed`）+ 一份 `coverage: failed` 的报告 |
 | 只读沙箱 | `ProtectSystem=strict`、`ProtectHome=read-only`、`ReadOnlyPaths=/home/workspace/quantime`、`ReadWritePaths=/home/workspace/quantime/data`（**只**这一项）。`uv run --no-sync --offline` 不写 `.venv`；`PYTHONDONTWRITEBYTECODE=1` 不写 `__pycache__`；uv 缓存在私有 `/tmp` |
-| 磁盘守卫 | **全部写入口**（`daily` / `backfill` / `ingest` / `ingest --rerun-of`）共用同一处守卫：它在开 batch 的共用边界（`ingest_one` 开头，取任何字节之前）量数据根所在文件系统的剩余空间，低于 `--min-free-gb`（三个写子命令同一参数；unit 里写的 5，缺省也是 5，可由 `QUANTIME_MIN_FREE_GB` 改缺省；只有显式 `0` 关闭）→ 不发请求、不开新 batch，运行记录 `abort_reason: disk_low`（备注写明剩余 / 阈值），报告 `coverage: failed` 并写明剩余 / 阈值，退出码 1。`daily` / `backfill` 的报告按序列列出被拦下的缺档；`ingest` 平时不写运行记录与报告，被拦下时补写一份运行记录 + 一份 `mode: aborted` 的报告（无序列明细，与 `record-abort --reason disk_low` 同形），之后的序列不再尝试 |
+| 磁盘守卫 | **全部写入口**（`daily` / `backfill` / `ingest` / `ingest --rerun-of`）共用同一处守卫：它在开 batch 的共用边界（`ingest_one` 开头，取任何字节之前）量数据根所在文件系统的剩余空间，低于 `--min-free-gb`（三个写子命令同一参数；unit 里写的 5，缺省也是 5，可由 `QUANTIME_MIN_FREE_GB` 改缺省，空串视同未设置；**0 关闭；负数 / NaN / 非有限值 / 非数字为配置错误，进程拒绝启动**（参数与环境变量同一解析函数，在任何磁盘检查、请求、batch 之前以非零退出，不回落到 5））→ 不发请求、不开新 batch，运行记录 `abort_reason: disk_low`（备注写明剩余 / 阈值），报告 `coverage: failed` 并写明剩余 / 阈值，退出码 1。`daily` / `backfill` 的报告按序列列出被拦下的缺档；`ingest` 平时不写运行记录与报告，被拦下时补写一份运行记录 + 一份 `mode: aborted` 的报告（无序列明细，与 `record-abort --reason disk_low` 同形），之后的序列不再尝试 |
 | 首跑遇到 pending | funding 月档在次月第一个周一才发布。没有水位线的首跑整段 pending 时，请求起点记进运行记录 `pending_since`；之后的 `--since-last` 从 `min(水位线次日, 未消化的 pending 起点)` 取，月档发布后真正落成 batch。**不需要手工回填或任何人工步骤来接住它** |
 
 ## 0. 前置检查（只读，不改任何东西）
@@ -186,7 +186,7 @@ REPORT=/home/workspace/quantime/data/reports/2026-09-23/<run_id>.json
 uv run --no-sync --offline --package quantime-data quantime-ingest \
   --root /home/workspace/quantime/data --source binance_vision backfill --from-report "$REPORT" --dry-run
 
-# 确认后执行（磁盘守卫同一处生效：--min-free-gb，默认 5）
+# 确认后执行（磁盘守卫同一处生效：--min-free-gb，默认 5；0 关闭，负数 / NaN / 非有限值拒绝启动）
 uv run --no-sync --package quantime-data quantime-ingest \
   --root /home/workspace/quantime/data --source binance_vision backfill --from-report "$REPORT"
 ```
