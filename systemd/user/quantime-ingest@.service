@@ -1,0 +1,74 @@
+# quantime 每日摄取（QNT-45 第 5 项）——模板 unit，实例名 = 数据源名。
+#
+#   systemctl --user start quantime-ingest@binance_vision.service
+#
+# **本 unit 不含任何凭据。** 当前接入的数据源都是公开只读归档（无 key、无签名，
+# ADR-0001 凭据边界）。将来若接入付费源，凭据一律经 1Password 在 ExecStartPre 注入，
+# 绝不写进 unit、绝不写进 Environment=、绝不落文件——写法见文件末尾的注释占位。
+#
+# 安装与启用由 owner 按 systemd/user/INSTALL.md 逐项执行。本卡只交付文件。
+
+[Unit]
+Description=quantime 每日增量摄取（源 %i）
+Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INSTALL.md
+# 没网就别跑：失败一次会污染当天的运行记录，不如等 timer 的 Persistent 补跑。
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/quantime
+
+# `--since-last` 是这张卡的核心：区间起点按已提交 ingestion_batch 的水位线推算，
+# 每天只取新增的那一段。`--end` 取 UTC 昨日——当日归档上游尚未生成，取了必然 404。
+ExecStart=/usr/bin/env sh -c '\
+  cd "%h/quantime" && \
+  exec uv run --package quantime-data --extra ingest quantime-ingest \
+    --root "%h/quantime" --source %i \
+    daily --since-last \
+    --start "$(date -u -d "yesterday" +%%Y-%%m-%%d)" \
+    --end "$(date -u -d "yesterday" +%%Y-%%m-%%d)"'
+
+# 摄取是 I/O 密集且要让路给交互：低优先级，不和 owner 抢机器。
+Nice=10
+IOSchedulingClass=idle
+
+# 一次运行最多跑 1 小时。重试预算（--retry-max-seconds，默认 300s）管的是单次运行内部
+# 的退避；这个是兜底：卡死的进程不许占着下一次 timer 的窗口。
+TimeoutStartSec=3600
+
+# oneshot 失败**不自动重启**：重试在进程内部（退避 + 预算上限），进程级重启只会把同一个
+# 故障以更高频率重放。失败留给 timer 的下一次触发，或 owner 看报告后手动补采。
+Restart=no
+
+# 沙箱：摄取只需要读代码、写 %h/quantime/data。其余一律不给。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/quantime/data
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+# 只出 IP：摄取只做 HTTPS GET，不需要任何本地套接字族。
+RestrictAddressFamilies=AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=quantime-ingest-%i
+
+# ---- 凭据注入占位（当前**不启用**；公开只读源不需要任何 key）----
+# 将来接入付费源时按这个形状写，凭据只存在于子进程环境里，不落盘、不进 unit：
+#
+#   ExecStartPre=/usr/bin/op signin --account <account>
+#   ExecStart=/usr/bin/op run --env-file=%h/quantime/.env.tpl -- \
+#       uv run --package quantime-data --extra ingest quantime-ingest ...
+#
+# `.env.tpl` 只含 `op://quant-dev/<item>/credential` 引用（仓库只跟踪 *.tpl，
+# 真实 .env* 一律 ignored）。禁止 Environment=、EnvironmentFile= 明文凭据，
+# 禁止把 key 写进 unit 或任何文件（AGENTS.md §3 凭据来源）。

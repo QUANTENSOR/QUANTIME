@@ -1,0 +1,29 @@
+# quantime 每日摄取 timer（QNT-45 第 5 项）——每个数据源一个实例。
+#
+#   systemctl --user enable --now quantime-ingest@binance_vision.timer
+#
+# 安装由 owner 按 systemd/user/INSTALL.md 逐项执行。本卡只交付文件。
+
+[Unit]
+Description=每日触发 quantime 摄取（源 %i）
+Documentation=https://github.com/QUANTENSOR/QUANTIME/blob/main/systemd/user/INSTALL.md
+
+[Timer]
+# 固定 UTC 时刻：02:30 UTC。选 UTC 而不是本地时区，是因为归档按 UTC 日切——跟着本地
+# 夏令时漂移会让某一天摄取两次、另一天一次都没有。
+OnCalendar=*-*-* 02:30:00 UTC
+
+# 错过就补跑（关机、休眠、机器不在线）。没有它，一次关机就是数据里一个永久的洞——
+# 而增量水位线会把那个洞跳过去，第二天看不出来。
+Persistent=true
+
+# 0–20 分钟随机延迟：所有实例（以及将来 QNT-47/48 的源）不在同一秒撞上游。
+RandomizedDelaySec=20m
+# 随机量按 unit 名做稳定散列，同一实例每天落在同一个偏移上，便于比对「昨天几点跑的」。
+FixedRandomDelay=true
+
+AccuracySec=1m
+Unit=quantime-ingest@%i.service
+
+[Install]
+WantedBy=timers.target

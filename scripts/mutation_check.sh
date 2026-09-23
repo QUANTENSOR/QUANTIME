@@ -247,12 +247,12 @@ mutate "R1-2c 百分号编码一律拒绝" "$DATA/transport.py" \
   packages/data/tests/test_transport.py::test_normalization_bypasses_are_rejected_before_any_request
 
 # R1-3：不按请求区间裁剪——`start=end=2026-08-15` 重新提交整月 31 行。
-mutate "R1-3 按请求区间裁剪落盘的行" "$DATA/ingest.py" \
+mutate "R1-3 按请求区间裁剪落盘的行" "$DATA/spec.py" \
   'keep = [i for i, t in enumerate(times) if start <= t < end]=>>keep = list(range(len(times)))' \
   packages/data/tests/test_ingest.py::test_only_rows_inside_the_requested_window_are_committed
 
 # R1-3b：窗口右端点算错一天——末日整根日线被裁掉（半开窗口的经典 off-by-one）。
-mutate "R1-3b 窗口右端点含 end 当天" "$DATA/ingest.py" \
+mutate "R1-3b 窗口右端点含 end 当天" "$DATA/spec.py" \
   'end = dt.datetime.combine(spec.end + dt.timedelta(days=1), dt.time.min, tzinfo=dt.UTC)=>>end = dt.datetime.combine(spec.end, dt.time.min, tzinfo=dt.UTC)' \
   packages/data/tests/test_ingest.py::test_clip_to_window_is_a_pure_half_open_utc_window
 
@@ -277,7 +277,7 @@ mutate "R1-5 record.py 用法命令可用" fixtures/binance_public/record.py \
   tests/test_static_guards.py::test_record_script_documents_a_runnable_command
 
 # Q28-4：跳过 .CHECKSUM 核对——被篡改/截断的上游字节会被当成好数据入湖。
-mutate "Q28-4 上游 .CHECKSUM 核对" "$DATA/ingest.py" \
+mutate "Q28-4 上游 .CHECKSUM 核对" "$DATA/sources/binance_public.py" \
   'if verify_checksum:=>>if False:' \
   packages/data/tests/test_ingest.py::test_checksum_mismatch_refuses_to_write_anything
 
@@ -302,6 +302,26 @@ mutate "Q28-8 CI 出网点收敛守卫" .github/workflows/ci.yml \
   tests/test_static_guards.py::test_ci_static_guard_egress_scope_is_not_weakened
 
 echo
+# ---- QNT-45 卡描述的四个变异点 ----
+mutate "Q45-a 重试之间必须退避" "$DATA/retry.py" \
+  '            sleep(wait)=>>            pass' \
+  packages/data/tests/test_retry.py::test_every_retry_is_preceded_by_an_exponential_wait
+
+mutate "Q45-b 增量只取水位线之后（改成全量重取）" "$DATA/incremental.py" \
+  'return spec.with_window(max(start, spec.start), spec.end)=>>return spec' \
+  packages/data/tests/test_incremental.py::test_the_next_window_starts_the_day_after_the_watermark
+
+mutate "Q45-c 补采写新 rerun batch（改成覆盖式 ingest）" "$DATA/daily.py" \
+  'kind=backfill_mod.BACKFILL_KIND,
+            rerun_of=task.rerun_of,=>>kind="ingest",
+            rerun_of=None,' \
+  packages/data/tests/test_daily.py::test_backfill_writes_a_new_rerun_batch_and_never_touches_the_original
+
+mutate "Q45-d unit 文件注入主网 host 字面量" "systemd/user/quantime-ingest@.service" \
+  '[Service]=>>[Service]
+Environment=QUANTIME_UPSTREAM=https://api.binance.com' \
+  tests/test_systemd_units.py::test_no_mainnet_or_trading_host_literals_in_unit_files
+
 echo "== fresh 重跑（还原后全量）=="
 clean
 if uv run pytest -q 2>&1 | tail -3; then

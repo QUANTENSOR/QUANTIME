@@ -9,9 +9,15 @@
 
 子命令
 ------
-`plan`    只打印将要请求的 URL（dry-run，不出网）
-`ingest`  按 `universe.yaml` 摄取；`--rerun-of` 走 `kind='rerun'`，
-          `--audit` 顺带做缺口/重复核查并把报告也经 publish 路径提交为一个 batch
+`plan`      只打印将要请求的 URL（dry-run，不出网）
+`ingest`    按 `universe.yaml` 摄取；`--rerun-of` 走 `kind='rerun'`，
+            `--audit` 顺带做缺口/重复核查并把报告也经 publish 路径提交为一个 batch
+`daily`     QNT-45 的无人值守入口：`--since-last` 增量 + 退避重试 + 每日核查报告；
+            systemd timer 调的就是它，退出码非零即本次有失败
+`backfill`  按一份核查报告补采缺口（`kind='rerun'` 新批次，不覆盖任何已发布文件）
+
+`daily` / `backfill` 的逻辑全在 `daily.py`（源无关通用层），本模块只解析参数、
+组装真实网络出口、打印结果。
 """
 
 from __future__ import annotations
@@ -27,7 +33,14 @@ from quantime_core.ids import new_run_id
 from quantime_core.paths import AssetClass, DataType, Freq
 
 from . import audit as audit_mod
+from . import daily as daily_mod
 from . import ingest as ingest_mod
+from .adapter import DEFAULT_SOURCE, adapter_names, get_adapter
+from .retry import (
+    DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_TOTAL_SECONDS,
+    RetryPolicy,
+)
 from .transport import PublicTransport, Response, assert_public_readonly_url
 from .universe import load_universe
 
@@ -124,9 +137,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--root", type=Path, default=Path("."), help="数据根目录（含 data/）")
     parser.add_argument("--universe", type=Path, default=None, help="标的清单 YAML")
+    parser.add_argument(
+        "--source",
+        default=DEFAULT_SOURCE,
+        choices=list(adapter_names()),
+        help=f"数据源 adapter（默认 {DEFAULT_SOURCE}）",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("plan", "ingest"):
+    for name in ("plan", "ingest", "daily"):
         p = sub.add_parser(name)
         p.add_argument("--start", type=_date, required=True, help="起始日 YYYY-MM-DD")
         p.add_argument("--end", type=_date, required=True, help="结束日 YYYY-MM-DD（含）")
@@ -138,24 +157,69 @@ def build_parser() -> argparse.ArgumentParser:
             help="可重复；默认全部三类",
         )
         p.add_argument("--symbol", action="append", default=None, help="可重复；默认清单全部")
-        if name == "ingest":
+        if name in ("ingest", "daily"):
             p.add_argument("--run-id", default=None, help="默认新建一个 ULID")
+            p.add_argument(
+                "--no-verify-checksum",
+                action="store_true",
+                help="跳过 .CHECKSUM 核对（不建议）",
+            )
+        if name == "ingest":
             p.add_argument(
                 "--rerun-of",
                 default=None,
                 help="同参数重跑：原 batch_id，写 kind='rerun' 的新 batch",
             )
             p.add_argument(
-                "--no-verify-checksum",
-                action="store_true",
-                help="跳过 .CHECKSUM 核对（不建议）",
-            )
-            p.add_argument(
                 "--audit",
                 action="store_true",
                 help="摄取后做缺口/重复核查并把报告也提交为一个 batch",
             )
+        if name == "daily":
+            p.add_argument(
+                "--since-last",
+                action="store_true",
+                help="增量：区间起点按已提交 ingestion_batch 的水位线推算",
+            )
+            _add_retry_flags(p)
+
+    bf = sub.add_parser("backfill")
+    bf.add_argument(
+        "--from-report",
+        dest="from_report",
+        type=Path,
+        required=True,
+        help="核查报告 JSON（data/reports/<date>/<run_id>.json）",
+    )
+    bf.add_argument("--run-id", default=None, help="默认新建一个 ULID")
+    bf.add_argument(
+        "--no-verify-checksum", action="store_true", help="跳过 .CHECKSUM 核对（不建议）"
+    )
+    bf.add_argument(
+        "--dry-run", action="store_true", help="只打印补采计划，不取任何字节、不写任何文件"
+    )
+    _add_retry_flags(bf)
     return parser
+
+
+def _add_retry_flags(p: argparse.ArgumentParser) -> None:
+    """重试预算——两个上限都可配（卡第 2 项「可配置次数上限与总时长」）。"""
+    p.add_argument(
+        "--retry-attempts",
+        type=int,
+        default=DEFAULT_MAX_ATTEMPTS,
+        help=f"单个归档的最大尝试次数（含首次，默认 {DEFAULT_MAX_ATTEMPTS}）",
+    )
+    p.add_argument(
+        "--retry-max-seconds",
+        type=float,
+        default=DEFAULT_MAX_TOTAL_SECONDS,
+        help=f"本次运行的重试墙钟预算（秒，默认 {DEFAULT_MAX_TOTAL_SECONDS:g}）",
+    )
+
+
+def _retry_policy(args) -> RetryPolicy:
+    return RetryPolicy(max_attempts=args.retry_attempts, max_total_seconds=args.retry_max_seconds)
 
 
 def _run_plan(args) -> int:
@@ -167,8 +231,9 @@ def _run_plan(args) -> int:
         end=args.end,
         symbols=args.symbol or [],
     )
+    adapter = get_adapter(getattr(args, "source", DEFAULT_SOURCE))
     for spec in specs:
-        for url, _ in ingest_mod.plan_urls(spec):
+        for url, _ in ingest_mod.plan_urls(spec, adapter):
             print(url)
     print(f"# {len(specs)} spec(s)", file=sys.stderr)
     return 0
@@ -184,6 +249,7 @@ def _run_ingest(args) -> int:
         symbols=args.symbol or [],
     )
     run_id = args.run_id or new_run_id()
+    adapter = get_adapter(getattr(args, "source", DEFAULT_SOURCE))
     transport = PublicTransport(_http_opener())
     fetch = _fetcher(transport)
 
@@ -200,6 +266,7 @@ def _run_ingest(args) -> int:
                 kind="rerun" if args.rerun_of else "ingest",
                 rerun_of=args.rerun_of,
                 verify_checksum=not args.no_verify_checksum,
+                adapter=adapter,
             )
         except ingest_mod.IngestError as exc:
             failures.append(f"{spec.describe()}: {exc}")
@@ -219,7 +286,7 @@ def _run_ingest(args) -> int:
             )
         )
         if args.audit:
-            audits.append(ingest_mod.audit_result(args.root, result))
+            audits.append(ingest_mod.audit_result(args.root, result, adapter))
 
     if audits:
         report = ingest_mod.commit_audit_report(
@@ -230,6 +297,7 @@ def _run_ingest(args) -> int:
             datatype=DataType.KLINE,
             freq=Freq.D1,
             asset_class=AssetClass.SPOT,
+            adapter=adapter,
         )
         print(
             json.dumps(
@@ -249,12 +317,100 @@ def _run_ingest(args) -> int:
     return 1 if failures and not results else 0
 
 
+def _run_daily(args) -> int:
+    """无人值守入口——systemd timer 调的就是它。"""
+    universe = load_universe(args.universe)
+    specs = _specs_for(
+        universe,
+        datatypes=args.datatype or ["kline", "funding", "open_interest"],
+        start=args.start,
+        end=args.end,
+        symbols=args.symbol or [],
+    )
+    run_id = args.run_id or new_run_id()
+    adapter = get_adapter(args.source)
+    fetch = _fetcher(PublicTransport(_http_opener()))
+    out = daily_mod.run_daily(
+        args.root,
+        specs,
+        fetch,
+        run_id=run_id,
+        adapter=adapter,
+        since_last=args.since_last,
+        verify_checksum=not args.no_verify_checksum,
+        retry_policy=_retry_policy(args),
+    )
+    _print_run(out)
+    return out.exit_code
+
+
+def _run_backfill(args) -> int:
+    """按报告补采缺口。`--dry-run` 只列计划，不取字节、不写文件。"""
+    adapter = get_adapter(args.source)
+    if args.dry_run:
+        from . import backfill as backfill_mod
+
+        plan = backfill_mod.plan_backfill(args.from_report, adapter=adapter)
+        for task in plan.tasks:
+            print(task.describe())
+        for skip in plan.skipped:
+            print(f"# 跳过（上游确实缺失）: {skip.filename} —— {skip.reason}", file=sys.stderr)
+        print(f"# {plan.describe()}", file=sys.stderr)
+        return 0
+
+    run_id = args.run_id or new_run_id()
+    fetch = _fetcher(PublicTransport(_http_opener()))
+    out = daily_mod.run_backfill_from_report(
+        args.root,
+        args.from_report,
+        fetch,
+        run_id=run_id,
+        adapter=adapter,
+        verify_checksum=not args.no_verify_checksum,
+        retry_policy=_retry_policy(args),
+    )
+    _print_run(out)
+    return out.exit_code
+
+
+def _print_run(out: daily_mod.RunOutput) -> None:
+    """一行 JSON 汇总到 stdout，明细到 stderr（journald 里一眼可读）。"""
+    print(
+        json.dumps(
+            {
+                "run_id": out.run_id,
+                "mode": out.log.mode,
+                "outcome": out.log.outcome,
+                "coverage": out.report.coverage,
+                "series": len(out.log.series),
+                "ok": out.log.ok_count,
+                "failed": out.log.failed_count,
+                "skipped_empty_increment": out.log.skipped_count,
+                "rows": out.log.total_rows,
+                "retries": out.log.total_retries,
+                "report_json": out.report_paths[0] if out.report_paths else None,
+            },
+            ensure_ascii=False,
+        )
+    )
+    for line in out.increments:
+        print(f"# {line}", file=sys.stderr)
+    for line in out.retry_log:
+        print(f"# retry {line}", file=sys.stderr)
+    for failure in out.report.failures:
+        print(f"FAILED {failure}", file=sys.stderr)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "plan":
         return _run_plan(args)
     if args.command == "ingest":
         return _run_ingest(args)
+    if args.command == "daily":
+        return _run_daily(args)
+    if args.command == "backfill":
+        return _run_backfill(args)
     raise AssertionError(f"未处理的子命令: {args.command}")  # pragma: no cover
 
 
